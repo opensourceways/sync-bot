@@ -15,7 +15,7 @@ RUN go env -w GO111MODULE=on && \
 # copy binary config and utils
 FROM openeuler/openeuler:24.03-lts
 RUN dnf -y update && \
-    dnf in -y shadow && \
+    dnf in -y shadow git && \
     groupadd -g 1000 robot && \
     useradd -u 1000 -g robot -s /bin/bash -m robot && \
     dnf clean all

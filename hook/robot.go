@@ -74,10 +74,10 @@ func NewRobot(c *Configuration, token []byte, logger *logrus.Entry) *robot {
 		return nil
 	}
 	gitClient, err := git.NewClient()
-	gitClient.SetCredentials("openeuler-sync-bot", token)
 	if err != nil {
 		logrus.WithError(err).Fatalf("New git client failed: %v", err)
 	}
+	gitClient.SetCredentials("LiYanghang00", token)
 	return &robot{cli: cli, cnf: c, log: logger, GitClient: gitClient}
 }
 
@@ -140,10 +140,6 @@ func (bot *robot) handlePREvent(evt *client.GenericEvent, repoCnfPtr any, logger
 }
 
 func (bot *robot) handlePullRequestCommentEvent(evt *client.GenericEvent, repoCnfPtr any, logger *logrus.Entry) {
-	if bot == nil || bot.cli == nil {
-		logger.Errorln("robot or client not initialized")
-		return
-	}
 	org, repo := utils.GetString(evt.Org), utils.GetString(evt.Repo)
 	repoCnf := reflect.ValueOf(repoCnfPtr).Interface().(*repoConfig)
 
