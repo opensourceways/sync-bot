@@ -736,6 +736,9 @@ func (r *Repo) CheckoutNewBranch(branch string, force bool) error {
 
 // CherryPick cherry-pick from commits with strategyOption
 func (r *Repo) CherryPick(first, last string, strategyOption StrategyOption) error {
+	if err := r.ensureIdentity(); err != nil {
+		return fmt.Errorf("git identity setup failed before cherry-pick: %v", err)
+	}
 	logrus.Infof("Cherry Pick from %s to %s.", first, last)
 	rangeArg := fmt.Sprintf("%s^..%s", first, last)
 	args := []string{"cherry-pick", "-x"}
@@ -940,8 +943,31 @@ func (r *Repo) Config(key, value string) error {
 	return nil
 }
 
+func (r *Repo) ensureIdentity() error {
+	getName := r.gitCommand("config", "--get", "user.name")
+	n, ne := getName.CombinedOutput()
+	name := strings.TrimSpace(string(n))
+	if ne != nil || name == "" {
+		if err := r.Config("user.name", "sync-bot"); err != nil {
+			return err
+		}
+	}
+	getEmail := r.gitCommand("config", "--get", "user.email")
+	e, ee := getEmail.CombinedOutput()
+	email := strings.TrimSpace(string(e))
+	if ee != nil || email == "" {
+		if err := r.Config("user.email", "sync-bot@local"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Merge incorporates changes from other branch
 func (r *Repo) Merge(ref string, option MergeOption) error {
+	if err := r.ensureIdentity(); err != nil {
+		return fmt.Errorf("git identity setup failed before merge: %v", err)
+	}
 	logrus.Infof("Running git merge %v %s", option, ref)
 	if b, err := r.gitCommand("merge", string(option), ref).CombinedOutput(); err != nil {
 		return fmt.Errorf("git merge %s %s failed: %v. output: %s", option, ref, err, string(b))
