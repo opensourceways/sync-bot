@@ -608,15 +608,29 @@ func (r *Repo) Checkout(commitLike string) error {
 		}
 		// explicit refspec to ensure remote-tracking reference exists locally
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
-		fetch := r.gitCommand("fetch", "--no-tags", "--filter=blob:none", remote, refspec)
-		if fb, ferr := fetch.CombinedOutput(); ferr != nil {
-			logrus.WithFields(logrus.Fields{
-				"dir":     r.dir,
-				"remote":  remote,
-				"branch":  branch,
-				"refspec": refspec,
-			}).Errorf("fetch remote branch before checkout failed: %v, output: %s", ferr, string(fb))
-			return fmt.Errorf("fetch %s/%s failed: %v. output: %s", remote, branch, ferr, string(fb))
+		if fb, ferr := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspec); ferr != nil {
+			out := string(fb)
+			if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") {
+				if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote, refspec); ferr2 != nil {
+					if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote, refspec); ferr3 != nil {
+						logrus.WithFields(logrus.Fields{
+							"dir":     r.dir,
+							"remote":  remote,
+							"branch":  branch,
+							"refspec": refspec,
+						}).Errorf("fetch remote branch before checkout failed: %v, output: %s", ferr3, string(fb3))
+						return fmt.Errorf("fetch %s/%s failed: %v. output: %s", remote, branch, ferr3, string(fb3))
+					}
+				}
+			} else {
+				logrus.WithFields(logrus.Fields{
+					"dir":     r.dir,
+					"remote":  remote,
+					"branch":  branch,
+					"refspec": refspec,
+				}).Errorf("fetch remote branch before checkout failed: %v, output: %s", ferr, out)
+				return fmt.Errorf("fetch %s/%s failed: %v. output: %s", remote, branch, ferr, out)
+			}
 		}
 		co := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
 		if b, err := co.CombinedOutput(); err != nil {
