@@ -89,6 +89,39 @@ func NewClientWithHost(host string) (*Client, error) {
 	}, nil
 }
 
+// PrewarmLargeRepos performs a full clone for known large repositories at startup if missing
+func (c *Client) PrewarmLargeRepos() error {
+	for fullName := range largeRepos {
+		dir := filepath.Join(c.dir, fullName)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			base := c.base
+			user, pass := c.getCredentials()
+			if user != "" && pass != "" {
+				base = fmt.Sprintf("https://%s:%s@%s", user, pass, c.host)
+			}
+			remote := fmt.Sprintf("%s/%s.git", base, fullName)
+			logrus.WithFields(logrus.Fields{
+				"remote": util.DeSecret(remote),
+				"dir":    dir,
+			}).Infof("Prewarm full clone for large repo %s", fullName)
+			if err2 := os.MkdirAll(filepath.Dir(dir), os.ModePerm); err2 != nil && !os.IsExist(err2) {
+				return fmt.Errorf("mkdir for prewarm failed: %v", err2)
+			}
+			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", remote, dir); err2 != nil {
+				logrus.WithFields(logrus.Fields{
+					"remote": util.DeSecret(remote),
+					"dir":    dir,
+				}).Errorf("Prewarm clone failed: %v, output: %s", err2, string(b))
+				return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err2, string(b))
+			}
+			// proactively disable partial clone flags if any
+			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
+			_ = r.DisablePartialClone()
+		}
+	}
+	return nil
+}
+
 // SetCredentials sets credentials in the client to be used for pushing to
 // or pulling from remote repositories.
 func (c *Client) SetCredentials(user string, tokenGenerator []byte) {
