@@ -116,7 +116,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		}
 
 		// pull for big repos by using upstream repos
-		if org == "openeuler" && repo == "kernel" {
+		if org == "openFuyao-test" && repo == "kernel" {
 			bigRemote := fmt.Sprintf("%s/%s.git", "https://gitcode.com", org+"/"+repo)
 
 			// check remote
@@ -136,7 +136,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 
 			// create branch in fork repo when it exists in origin repo but not exists in fork repo
 			// get fork repo'bot branches
-			forkBranches, ok := bot.cli.GetRepoAllBranch("openeuler-sync-bot", repo)
+			forkBranches, ok := bot.cli.GetRepoAllBranch("LiYanghang00", repo)
 			if !ok {
 				status = append(status, syncStatus{
 					Name:   branch,
@@ -259,9 +259,9 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		var num int
 		sleepyTime := time.Second
 
-		if org == "openeuler" && repo == "kernel" {
-			tempBranch = "openeuler-sync-bot:" + tempBranch
-			forkPath = fmt.Sprintf("%s/%s", "openeuler-sync-bot", repo)
+		if org == "openFuyao-test" && repo == "kernel" {
+			tempBranch = "LiYanghang00:" + tempBranch
+			forkPath = fmt.Sprintf("%s/%s", "LiYanghang00", repo)
 		}
 
 		for i := 0; i < 5; i++ {
@@ -398,7 +398,7 @@ func (bot *robot) sync(evt *client.GenericEvent, user string, command string, lo
 
 	var body string
 	var data interface{}
-	if org == "openeuler" && repo == "kernel" {
+	if org == "openFuyao-test" && repo == "kernel" {
 		data = struct {
 			PR   string
 			Body string
