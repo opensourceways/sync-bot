@@ -152,62 +152,71 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			}
 
 			if _, ok := forkBranchesList[branch]; !ok {
+				var src string
+				if r.RemoteBranchExistsIn("upstream", branch) {
+					src = fmt.Sprintf("upstream/%s", branch)
+				} else if r.RemoteBranchExistsIn("origin", branch) {
+					src = fmt.Sprintf("origin/%s", branch)
+				} else {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: createBranchFailed,
+					})
+					continue
+				}
+				err = r.CreateBranchAndPushToOrigin(branch, src)
+				if err != nil {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: createBranchFailed,
+					})
+					continue
+				}
+			}
+
+			if r.RemoteBranchExistsIn("upstream", branch) {
+				err = r.Checkout("upstream/" + branch)
+				if err != nil {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: checkoutFailed,
+					})
+					continue
+				}
 				err = r.FetchUpstream(branch)
 				if err != nil {
 					status = append(status, syncStatus{
 						Name:   branch,
-						Status: createBranchFailed,
+						Status: pullFailed,
 					})
 					continue
 				}
-
-				err = r.CreateBranchAndPushToOrigin(branch, fmt.Sprintf("upstream/%s", branch))
+				err = r.MergeUpstream(branch)
 				if err != nil {
 					status = append(status, syncStatus{
 						Name:   branch,
-						Status: createBranchFailed,
+						Status: mergeFailed,
 					})
 					continue
 				}
-			}
-
-			// git checkout branch
-			err = r.Checkout("upstream/" + branch)
-			if err != nil {
-				status = append(status, syncStatus{
-					Name:   branch,
-					Status: checkoutFailed,
-				})
-				continue
-			}
-
-			// git pull
-			err = r.FetchUpstream(branch)
-			if err != nil {
-				status = append(status, syncStatus{
-					Name:   branch,
-					Status: pullFailed,
-				})
-				continue
-			}
-
-			err = r.MergeUpstream(branch)
-			if err != nil {
-				status = append(status, syncStatus{
-					Name:   branch,
-					Status: mergeFailed,
-				})
-				continue
-			}
-
-			// git push
-			err = r.PushUpstreamToOrigin(branch)
-			if err != nil {
-				status = append(status, syncStatus{
-					Name:   branch,
-					Status: pushFailed,
-				})
-				continue
+				err = r.PushUpstreamToOrigin(branch)
+				if err != nil {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: pushFailed,
+					})
+					continue
+				}
+			} else {
+				_ = r.Clean()
+				err = r.Checkout("origin/" + branch)
+				if err != nil {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: checkoutFailed,
+					})
+					continue
+				}
 			}
 
 		} else {

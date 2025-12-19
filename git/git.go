@@ -456,7 +456,7 @@ func (r *Repo) CreateBranchAndPushToOrigin(branch, upstream string) error {
 			"upstream": upstream,
 		}).Warnf("initial checkout -B failed: %v, output: %s", err, string(b))
 		if strings.Contains(string(b), "invalid path") {
-			rev := r.gitCommand("rev-parse", fmt.Sprintf("upstream/%s", branch))
+			rev := r.gitCommand("rev-parse", upstream)
 			if shaBytes, shaErr := rev.CombinedOutput(); shaErr == nil {
 				sha := strings.TrimSpace(string(shaBytes))
 				logrus.WithFields(logrus.Fields{
@@ -478,7 +478,7 @@ func (r *Repo) CreateBranchAndPushToOrigin(branch, upstream string) error {
 				return nil
 			}
 		}
-		if !r.RemoteBranchExistsIn("upstream", branch) {
+		if !r.RemoteBranchExistsIn(strings.Split(upstream, "/")[0], branch) {
 			logrus.WithFields(logrus.Fields{
 				"dir":      r.dir,
 				"branch":   branch,
@@ -486,7 +486,9 @@ func (r *Repo) CreateBranchAndPushToOrigin(branch, upstream string) error {
 			}).Errorf("upstream branch not found")
 			return fmt.Errorf("upstream branch %s not found", branch)
 		}
-		if ferr := r.FetchUpstream(branch); ferr != nil {
+		srcRemote := strings.Split(upstream, "/")[0]
+		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, srcRemote, branch)
+		if ferr := r.fetchRefspecRobust(srcRemote, refspec); ferr != nil {
 			logrus.WithFields(logrus.Fields{
 				"dir":      r.dir,
 				"branch":   branch,
@@ -494,7 +496,7 @@ func (r *Repo) CreateBranchAndPushToOrigin(branch, upstream string) error {
 			}).Errorf("fetch upstream before checkout failed: %v", ferr)
 			return fmt.Errorf("create branch by upstream failed after fetch, output: %s, err: %v", string(b), ferr)
 		}
-		rev := r.gitCommand("rev-parse", fmt.Sprintf("upstream/%s", branch))
+		rev := r.gitCommand("rev-parse", upstream)
 		if shaBytes, shaErr := rev.CombinedOutput(); shaErr == nil {
 			sha := strings.TrimSpace(string(shaBytes))
 			co2 := r.gitCommand("checkout", "-B", branch, sha)
