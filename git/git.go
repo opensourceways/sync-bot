@@ -117,6 +117,7 @@ func (c *Client) PrewarmLargeRepos() error {
 			// proactively disable partial clone flags if any
 			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
 			_ = r.DisablePartialClone()
+			logrus.Infof("repo: %s is finshed", r.repo)
 		}
 	}
 	return nil
