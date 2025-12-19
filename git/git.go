@@ -610,7 +610,8 @@ func (r *Repo) Checkout(commitLike string) error {
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
 		if fb, ferr := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspec); ferr != nil {
 			out := string(fb)
-			if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") {
+			if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") ||
+				strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
 				if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote, refspec); ferr2 != nil {
 					if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote, refspec); ferr3 != nil {
 						logrus.WithFields(logrus.Fields{
