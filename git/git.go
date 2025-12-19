@@ -597,12 +597,16 @@ func (r *Repo) Checkout(commitLike string) error {
 		logrus.Infof("Checkout remote branch %s/%s.", remote, branch)
 		// verify remote branch exists
 		if !r.RemoteBranchExistsIn(remote, branch) {
-			logrus.WithFields(logrus.Fields{
-				"dir":    r.dir,
-				"remote": remote,
-				"branch": branch,
-			}).Errorf("remote branch not found before checkout")
-			return fmt.Errorf("remote branch %s/%s not found", remote, branch)
+			if remote == "upstream" && r.RemoteBranchExistsIn("origin", branch) {
+				remote = "origin"
+			} else {
+				logrus.WithFields(logrus.Fields{
+					"dir":    r.dir,
+					"remote": remote,
+					"branch": branch,
+				}).Errorf("remote branch not found before checkout")
+				return fmt.Errorf("remote branch %s/%s not found", remote, branch)
+			}
 		}
 		_ = r.DisablePartialClone()
 		// explicit refspec to ensure remote-tracking reference exists locally
