@@ -172,7 +172,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			}
 
 			// git checkout branch
-			err = r.Checkout("origin/" + branch)
+			err = r.Checkout("upstream/" + branch)
 			if err != nil {
 				status = append(status, syncStatus{
 					Name:   branch,
