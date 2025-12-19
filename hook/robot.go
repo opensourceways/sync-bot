@@ -14,7 +14,6 @@
 package hook
 
 import (
-	"os"
 	"reflect"
 	"slices"
 
@@ -79,13 +78,12 @@ func NewRobot(c *Configuration, token []byte, logger *logrus.Entry) *robot {
 		logrus.WithError(err).Fatalf("New git client failed: %v", err)
 	}
 	gitClient.SetCredentials("LiYanghang00", token)
-	if os.Getenv("SYNC_BOT_DISABLE_PREWARM") != "true" {
-		go func() {
-			if err := gitClient.PrewarmLargeRepos(); err != nil {
-				logrus.WithError(err).Warnf("Prewarm large repos failed")
-			}
-		}()
-	}
+	go func() {
+		if err := gitClient.PrewarmLargeRepos(); err != nil {
+			logrus.WithError(err).Warnf("Prewarm large repos failed")
+		}
+	}()
+
 	return &robot{cli: cli, cnf: c, log: logger, GitClient: gitClient}
 }
 
