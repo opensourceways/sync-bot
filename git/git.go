@@ -423,31 +423,7 @@ func (r *Repo) MergeUpstream(branch string) error {
 	co := r.gitCommand("merge", fmt.Sprintf("upstream/%s", branch))
 	b, err := co.CombinedOutput()
 	if err != nil {
-		out := string(b)
-		logrus.WithFields(logrus.Fields{
-			"dir":    r.dir,
-			"branch": branch,
-		}).Warnf("merge failed: %v, output: %s. falling back to update-ref", err, out)
-		rev := r.gitCommand("rev-parse", fmt.Sprintf("upstream/%s", branch))
-		shaBytes, shaErr := rev.CombinedOutput()
-		if shaErr != nil {
-			logrus.WithFields(logrus.Fields{
-				"dir":    r.dir,
-				"branch": branch,
-			}).Errorf("rev-parse upstream/%s failed: %v, output: %s", branch, shaErr, string(shaBytes))
-			return fmt.Errorf("git rev-parse upstream/%s failed: %v, output: %s", branch, shaErr, string(shaBytes))
-		}
-		sha := strings.TrimSpace(string(shaBytes))
-		upd := r.gitCommand("update-ref", fmt.Sprintf("refs/heads/%s", branch), sha)
-		if ub, ue := upd.CombinedOutput(); ue != nil {
-			logrus.WithFields(logrus.Fields{
-				"dir":    r.dir,
-				"branch": branch,
-				"sha":    sha,
-			}).Errorf("update-ref fallback failed: %v, output: %s", ue, string(ub))
-			return fmt.Errorf("git update-ref %s to %s failed: %v, output: %s", branch, sha, ue, string(ub))
-		}
-		return nil
+		return fmt.Errorf("git merge %s failed, output: %s, err: %v", branch, string(b), err)
 	}
 
 	return nil
@@ -645,25 +621,6 @@ func (r *Repo) Checkout(commitLike string) error {
 		co := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
 		if b, err := co.CombinedOutput(); err != nil {
 			out := string(b)
-			if strings.Contains(out, "invalid path") {
-				logrus.WithFields(logrus.Fields{
-					"dir":    r.dir,
-					"remote": remote,
-					"branch": branch,
-				}).Warnf("invalid path encountered during checkout, falling back to branch -f without working tree")
-				br := r.gitCommand("branch", "-f", branch, remote+"/"+branch)
-				if bb, be := br.CombinedOutput(); be != nil {
-					logrus.WithFields(logrus.Fields{
-						"dir":    r.dir,
-						"remote": remote,
-						"branch": branch,
-					}).Errorf("branch -f fallback failed: %v, output: %s", be, string(bb))
-					return fmt.Errorf("branch -f %s/%s failed: %v. output: %s", remote, branch, be, string(bb))
-				}
-				wd2, _ := os.Getwd()
-				fmt.Println("wd:", wd2)
-				return nil
-			}
 			if strings.Contains(out, "would be overwritten by checkout") {
 				logrus.WithFields(logrus.Fields{
 					"dir":    r.dir,
@@ -721,44 +678,6 @@ func (r *Repo) Checkout(commitLike string) error {
 					return fmt.Errorf("error checking out %s after clean: %v. output: %s", commitLike, err3, string(b2))
 				}
 			} else {
-				// fallback: try remote branch pattern if pathspec not found and commitLike looks like remote/branch
-				if strings.Contains(out, "did not match any file(s) known to git") && strings.Contains(commitLike, "/") {
-					parts2 := strings.SplitN(commitLike, "/", 2)
-					if len(parts2) == 2 {
-						remote := parts2[0]
-						branch := parts2[1]
-						logrus.Infof("Fallback: checkout remote branch %s/%s.", remote, branch)
-						if !r.RemoteBranchExistsIn(remote, branch) {
-							logrus.WithFields(logrus.Fields{
-								"dir":    r.dir,
-								"remote": remote,
-								"branch": branch,
-							}).Errorf("remote branch not found for fallback")
-							return fmt.Errorf("remote branch %s/%s not found", remote, branch)
-						}
-						fetch2 := r.gitCommand("fetch", "--no-tags", "--filter=blob:none", remote, branch)
-						if fb2, ferr2 := fetch2.CombinedOutput(); ferr2 != nil {
-							logrus.WithFields(logrus.Fields{
-								"dir":    r.dir,
-								"remote": remote,
-								"branch": branch,
-							}).Errorf("fallback fetch failed: %v, output: %s", ferr2, string(fb2))
-							return fmt.Errorf("fallback fetch %s/%s failed: %v. output: %s", remote, branch, ferr2, string(fb2))
-						}
-						cofb := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
-						if bfb, efb := cofb.CombinedOutput(); efb != nil {
-							logrus.WithFields(logrus.Fields{
-								"dir":    r.dir,
-								"remote": remote,
-								"branch": branch,
-							}).Errorf("fallback checkout -B failed: %v, output: %s", efb, string(bfb))
-							return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, efb, string(bfb))
-						}
-						wd2, _ := os.Getwd()
-						fmt.Println("wd:", wd2)
-						return nil
-					}
-				}
 				logrus.WithFields(logrus.Fields{
 					"dir":        r.dir,
 					"commitLike": commitLike,
@@ -767,8 +686,6 @@ func (r *Repo) Checkout(commitLike string) error {
 			}
 		}
 	}
-	wd, _ := os.Getwd()
-	fmt.Println("wd:", wd)
 	return nil
 }
 
@@ -939,48 +856,7 @@ func (r *Repo) DeleteBranch(branch string, force bool) error {
 	}
 	out, err := co.CombinedOutput()
 	if err != nil {
-		msg := string(out)
-		logrus.WithFields(logrus.Fields{
-			"dir":    r.dir,
-			"branch": branch,
-		}).Warnf("Delete branch failed: %v, output: %q", err, msg)
-		// fallback: detach HEAD if branch is used by current worktree or checked out
-		if strings.Contains(msg, "used by worktree") || strings.Contains(msg, "is checked out") {
-			logrus.WithFields(logrus.Fields{
-				"dir":    r.dir,
-				"branch": branch,
-			}).Infof("Detaching HEAD to allow branch deletion (update-ref)")
-			rev := r.gitCommand("rev-parse", "HEAD")
-			hb, he := rev.CombinedOutput()
-			if he == nil {
-				sha := strings.TrimSpace(string(hb))
-				det := r.gitCommand("update-ref", "HEAD", sha)
-				if db, de := det.CombinedOutput(); de != nil {
-					logrus.WithFields(logrus.Fields{
-						"dir":    r.dir,
-						"branch": branch,
-					}).Warnf("Detach HEAD via update-ref failed: %v, output: %s", de, string(db))
-				}
-			} else {
-				logrus.WithFields(logrus.Fields{
-					"dir":    r.dir,
-					"branch": branch,
-				}).Warnf("rev-parse HEAD failed before detach: %v, output: %s", he, string(hb))
-			}
-			// retry delete
-			if force {
-				co = r.gitCommand("branch", "--delete", "--force", branch)
-			} else {
-				co = r.gitCommand("branch", "--delete", branch)
-			}
-			out2, err2 := co.CombinedOutput()
-			if err2 != nil {
-				logrus.Errorf("Delete branch %s after detach failed: %v, output: %q", branch, string(out2), err2)
-				return fmt.Errorf("delete branch %s failed, output: %q, error: %v", branch, string(out2), err2)
-			}
-			return nil
-		}
-		return fmt.Errorf("delete branch %s failed, output: %q, error: %v", branch, msg, err)
+		return fmt.Errorf("delete branch %s failed, output: %q, error: %v", branch, string(out), err)
 	}
 	return nil
 }
