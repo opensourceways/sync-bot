@@ -415,6 +415,32 @@ func (r *Repo) FetchUpstream(branch string) error {
 	return nil
 }
 
+func (r *Repo) FetchUpstreamFull(branch string) error {
+	logrus.Infof("fetch upstream branch %s with full history", branch)
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/upstream/%s", branch, branch)
+	co := r.gitCommand("fetch", "--no-tags", "upstream", refspec)
+	b, err := co.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git full fetch upstream %s failed, output: %s, err: %v", branch, string(b), err)
+	}
+	return nil
+}
+
+func (r *Repo) CheckoutRemoteBySHA(remote, branch string) error {
+	rev := r.gitCommand("rev-parse", remote+"/"+branch)
+	b, e := rev.CombinedOutput()
+	if e != nil {
+		return fmt.Errorf("rev-parse %s/%s failed: %v. output: %s", remote, branch, e, string(b))
+	}
+	sha := strings.TrimSpace(string(b))
+	co := r.gitCommand("checkout", "-B", branch, sha)
+	out, err := co.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checkout -B %s by sha %s failed: %v. output: %s", branch, sha, err, string(out))
+	}
+	return nil
+}
+
 // MergeUpstream merge the upstream branch to local
 func (r *Repo) MergeUpstream(branch string) error {
 	logrus.Infof("merge upstream branch %s", branch)
@@ -639,39 +665,120 @@ func (r *Repo) Checkout(commitLike string) error {
 			}).Errorf("fetch remote branch before checkout failed: %v", ferr)
 			return fmt.Errorf("fetch %s/%s failed: %v", remote, branch, ferr)
 		}
-		co := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
-		if b, err := co.CombinedOutput(); err != nil {
-			out := string(b)
-			if strings.Contains(out, "would be overwritten by checkout") {
-				logrus.WithFields(logrus.Fields{
-					"dir":    r.dir,
-					"remote": remote,
-					"branch": branch,
-				}).Warnf("checkout would overwrite local changes, attempting clean. output: %s", out)
-				if err2 := r.Clean(); err2 != nil {
+		rev := r.gitCommand("rev-parse", remote+"/"+branch)
+		hb, he := rev.CombinedOutput()
+		if he == nil {
+			sha := strings.TrimSpace(string(hb))
+			co := r.gitCommand("checkout", "-B", branch, sha)
+			if b, err := co.CombinedOutput(); err != nil {
+				out := string(b)
+				if strings.Contains(out, "would be overwritten by checkout") {
 					logrus.WithFields(logrus.Fields{
 						"dir":    r.dir,
 						"remote": remote,
 						"branch": branch,
-					}).Errorf("clean before retry failed: %v", err2)
+					}).Warnf("checkout would overwrite local changes, attempting clean. output: %s", out)
+					if err2 := r.Clean(); err2 != nil {
+						logrus.WithFields(logrus.Fields{
+							"dir":    r.dir,
+							"remote": remote,
+							"branch": branch,
+						}).Errorf("clean before retry failed: %v", err2)
+						return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
+					}
+					co2 := r.gitCommand("checkout", "-B", branch, sha)
+					if b2, err3 := co2.CombinedOutput(); err3 != nil {
+						logrus.WithFields(logrus.Fields{
+							"dir":    r.dir,
+							"remote": remote,
+							"branch": branch,
+						}).Errorf("checkout after clean failed: %v, output: %s", err3, string(b2))
+						return fmt.Errorf("error checking out %s after clean: %v. output: %s", commitLike, err3, string(b2))
+					}
+				} else if strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
+					if remote == "origin" && r.RemoteBranchExistsIn("upstream", branch) {
+						refspec2 := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, "upstream", branch)
+						if ferr2 := r.fetchRefspecRobust("upstream", refspec2); ferr2 == nil {
+							rev2 := r.gitCommand("rev-parse", "upstream/"+branch)
+							if sb, se := rev2.CombinedOutput(); se == nil {
+								sha2 := strings.TrimSpace(string(sb))
+								co3 := r.gitCommand("checkout", "-B", branch, sha2)
+								if _, e3 := co3.CombinedOutput(); e3 == nil {
+									return nil
+								}
+							}
+						}
+					}
+					logrus.WithFields(logrus.Fields{
+						"dir":    r.dir,
+						"remote": remote,
+						"branch": branch,
+					}).Errorf("checkout remote branch failed: %v, output: %s", err, out)
+					return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
+				} else {
+					logrus.WithFields(logrus.Fields{
+						"dir":    r.dir,
+						"remote": remote,
+						"branch": branch,
+					}).Errorf("checkout remote branch failed: %v, output: %s", err, out)
 					return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
 				}
-				co2 := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
-				if b2, err3 := co2.CombinedOutput(); err3 != nil {
+			}
+		} else {
+			co := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
+			if b, err := co.CombinedOutput(); err != nil {
+				out := string(b)
+				if strings.Contains(out, "would be overwritten by checkout") {
 					logrus.WithFields(logrus.Fields{
 						"dir":    r.dir,
 						"remote": remote,
 						"branch": branch,
-					}).Errorf("checkout after clean failed: %v, output: %s", err3, string(b2))
-					return fmt.Errorf("error checking out %s after clean: %v. output: %s", commitLike, err3, string(b2))
+					}).Warnf("checkout would overwrite local changes, attempting clean. output: %s", out)
+					if err2 := r.Clean(); err2 != nil {
+						logrus.WithFields(logrus.Fields{
+							"dir":    r.dir,
+							"remote": remote,
+							"branch": branch,
+						}).Errorf("clean before retry failed: %v", err2)
+						return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
+					}
+					co2 := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
+					if b2, err3 := co2.CombinedOutput(); err3 != nil {
+						logrus.WithFields(logrus.Fields{
+							"dir":    r.dir,
+							"remote": remote,
+							"branch": branch,
+						}).Errorf("checkout after clean failed: %v, output: %s", err3, string(b2))
+						return fmt.Errorf("error checking out %s after clean: %v. output: %s", commitLike, err3, string(b2))
+					}
+				} else if strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
+					if remote == "origin" && r.RemoteBranchExistsIn("upstream", branch) {
+						refspec2 := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, "upstream", branch)
+						if ferr2 := r.fetchRefspecRobust("upstream", refspec2); ferr2 == nil {
+							rev := r.gitCommand("rev-parse", "upstream/"+branch)
+							if sb, se := rev.CombinedOutput(); se == nil {
+								sha := strings.TrimSpace(string(sb))
+								co3 := r.gitCommand("checkout", "-B", branch, sha)
+								if _, e3 := co3.CombinedOutput(); e3 == nil {
+									return nil
+								}
+							}
+						}
+					}
+					logrus.WithFields(logrus.Fields{
+						"dir":    r.dir,
+						"remote": remote,
+						"branch": branch,
+					}).Errorf("checkout remote branch failed: %v, output: %s", err, out)
+					return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
+				} else {
+					logrus.WithFields(logrus.Fields{
+						"dir":    r.dir,
+						"remote": remote,
+						"branch": branch,
+					}).Errorf("checkout remote branch failed: %v, output: %s", err, out)
+					return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
 				}
-			} else {
-				logrus.WithFields(logrus.Fields{
-					"dir":    r.dir,
-					"remote": remote,
-					"branch": branch,
-				}).Errorf("checkout remote branch failed: %v, output: %s", err, out)
-				return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, out)
 			}
 		}
 	} else {
@@ -1002,6 +1109,12 @@ func (r *Repo) DisablePartialClone() error {
 	co = r.gitCommand("config", "--unset-all", "remote.origin.partialclonefilter")
 	_, _ = co.CombinedOutput()
 	co = r.gitCommand("config", "--local", "--unset-all", "extensions.partialclone")
+	_, _ = co.CombinedOutput()
+	co = r.gitCommand("config", "--local", "remote.upstream.promisor", "false")
+	_, _ = co.CombinedOutput()
+	co = r.gitCommand("config", "--local", "--unset-all", "remote.upstream.promisor")
+	_, _ = co.CombinedOutput()
+	co = r.gitCommand("config", "--unset-all", "remote.upstream.partialclonefilter")
 	_, _ = co.CombinedOutput()
 	return nil
 }

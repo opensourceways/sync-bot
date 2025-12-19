@@ -175,6 +175,8 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			}
 
 			if r.RemoteBranchExistsIn("upstream", branch) {
+				_ = r.DisablePartialClone()
+				_ = r.FetchUpstreamFull(branch)
 				err = r.Checkout("upstream/" + branch)
 				if err != nil {
 					status = append(status, syncStatus{
@@ -209,7 +211,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 				}
 			} else {
 				_ = r.Clean()
-				err = r.Checkout("origin/" + branch)
+				err = r.CheckoutRemoteBySHA("origin", branch)
 				if err != nil {
 					status = append(status, syncStatus{
 						Name:   branch,
@@ -221,7 +223,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 
 		} else {
 			_ = r.Clean()
-			err = r.Checkout("origin/" + branch)
+			err = r.CheckoutRemoteBySHA("origin", branch)
 			if err != nil {
 				status = append(status, syncStatus{
 					Name:   branch,
