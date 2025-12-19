@@ -239,6 +239,9 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			})
 			continue
 		}
+		if org == "openFuyao-test" && repo == "kernel" {
+			_ = r.SparseForRange(firstSha, lastSha)
+		}
 		err = r.CherryPick(firstSha, lastSha, git.Theirs)
 		if err != nil {
 			logrus.Errorln("Cherry pick failed:", err.Error())
