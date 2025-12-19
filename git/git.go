@@ -613,6 +613,7 @@ func (r *Repo) Checkout(commitLike string) error {
 			if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") ||
 				strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
 				if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote, refspec); ferr2 != nil {
+					_ = r.DisablePartialClone()
 					if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote, refspec); ferr3 != nil {
 						logrus.WithFields(logrus.Fields{
 							"dir":     r.dir,
@@ -955,6 +956,16 @@ func (r *Repo) Config(key, value string) error {
 	if b, err := r.gitCommand("config", key, value).CombinedOutput(); err != nil {
 		return fmt.Errorf("git config %s %s failed: %v. output: %s", key, value, err, string(b))
 	}
+	return nil
+}
+
+func (r *Repo) DisablePartialClone() error {
+	co := r.gitCommand("config", "--local", "remote.origin.promisor", "false")
+	if b, err := co.CombinedOutput(); err != nil {
+		return fmt.Errorf("disable promisor failed: %v. output: %s", err, string(b))
+	}
+	co = r.gitCommand("config", "--unset-all", "remote.origin.partialclonefilter")
+	_, _ = co.CombinedOutput()
 	return nil
 }
 
