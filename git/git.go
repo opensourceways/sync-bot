@@ -403,15 +403,13 @@ func (r *Repo) AddRemote(remotePath string) error {
 func (r *Repo) FetchUpstream(branch string) error {
 	logrus.Infof("fetch upstream branch %s", branch)
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/upstream/%s", branch, branch)
-	co := r.gitCommand("fetch", "--no-tags", "--filter=blob:none", "--depth", "50", "upstream", refspec)
-	b, err := co.CombinedOutput()
-	if err != nil {
+	if ferr := r.fetchRefspecRobust("upstream", refspec); ferr != nil {
 		logrus.WithFields(logrus.Fields{
 			"dir":     r.dir,
 			"branch":  branch,
 			"refspec": refspec,
-		}).Errorf("git fetch upstream failed: %v, output: %s", err, string(b))
-		return fmt.Errorf("git fetch %s failed, output: %s, err: %v", branch, string(b), err)
+		}).Errorf("git fetch upstream failed: %v", ferr)
+		return fmt.Errorf("git fetch upstream %s failed: %v", branch, ferr)
 	}
 
 	return nil
@@ -606,33 +604,17 @@ func (r *Repo) Checkout(commitLike string) error {
 			}).Errorf("remote branch not found before checkout")
 			return fmt.Errorf("remote branch %s/%s not found", remote, branch)
 		}
+		_ = r.DisablePartialClone()
 		// explicit refspec to ensure remote-tracking reference exists locally
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
-		if fb, ferr := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspec); ferr != nil {
-			out := string(fb)
-			if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") ||
-				strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
-				if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote, refspec); ferr2 != nil {
-					_ = r.DisablePartialClone()
-					if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote, refspec); ferr3 != nil {
-						logrus.WithFields(logrus.Fields{
-							"dir":     r.dir,
-							"remote":  remote,
-							"branch":  branch,
-							"refspec": refspec,
-						}).Errorf("fetch remote branch before checkout failed: %v, output: %s", ferr3, string(fb3))
-						return fmt.Errorf("fetch %s/%s failed: %v. output: %s", remote, branch, ferr3, string(fb3))
-					}
-				}
-			} else {
-				logrus.WithFields(logrus.Fields{
-					"dir":     r.dir,
-					"remote":  remote,
-					"branch":  branch,
-					"refspec": refspec,
-				}).Errorf("fetch remote branch before checkout failed: %v, output: %s", ferr, out)
-				return fmt.Errorf("fetch %s/%s failed: %v. output: %s", remote, branch, ferr, out)
-			}
+		if ferr := r.fetchRefspecRobust(remote, refspec); ferr != nil {
+			logrus.WithFields(logrus.Fields{
+				"dir":     r.dir,
+				"remote":  remote,
+				"branch":  branch,
+				"refspec": refspec,
+			}).Errorf("fetch remote branch before checkout failed: %v", ferr)
+			return fmt.Errorf("fetch %s/%s failed: %v", remote, branch, ferr)
 		}
 		co := r.gitCommand("checkout", "-B", branch, remote+"/"+branch)
 		if b, err := co.CombinedOutput(); err != nil {
@@ -851,13 +833,13 @@ func (r *Repo) Push(branch string, force bool) error {
 		remote = fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, "LiYanghang00", r.repo)
 	}
 
-	var co *exec.Cmd
+	var args []string
 	if force {
-		co = r.gitCommand("push", "--force", remote, branch)
+		args = []string{"push", "--force", remote, branch}
 	} else {
-		co = r.gitCommand("push", remote, branch)
+		args = []string{"push", remote, branch}
 	}
-	out, err := co.CombinedOutput()
+	out, err := retryCmd(r.dir, r.git, args...)
 	if err != nil {
 		logrus.Errorf("Pushing failed with error: %v and output: %q", err, string(out))
 		return fmt.Errorf("pushing failed, output: %q, error: %v", string(out), err)
@@ -887,8 +869,7 @@ func (r *Repo) DeleteRemoteBranch(branch string) error {
 	}
 	logrus.Infof("Delete remote branch '%s/%s (branch: %s)'.", r.owner, r.repo, branch)
 	remote := fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, r.owner, r.repo)
-	co := r.gitCommand("push", remote, "--delete", branch)
-	out, err := co.CombinedOutput()
+	out, err := retryCmd(r.dir, r.git, "push", remote, "--delete", branch)
 	if err != nil {
 		logrus.Errorf("Delete remote branch %s failed with error: %v and output: %q", branch, err, string(out))
 		return fmt.Errorf("delete remote branch %s failed, output: %q, error: %v", branch, string(out), err)
@@ -950,6 +931,36 @@ func (r *Repo) Sparse(paths []string) error {
 	return nil
 }
 
+func (r *Repo) SparseForRange(first, last string) error {
+	rangeArg := fmt.Sprintf("%s^..%s", first, last)
+	co := r.gitCommand("diff", "--name-only", rangeArg)
+	b, err := co.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git diff --name-only %s failed: %v, output: %s", rangeArg, err, string(b))
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	pathsSet := make(map[string]struct{})
+	for _, p := range lines {
+		if p == "" {
+			continue
+		}
+		d := filepath.Dir(p)
+		if d == "." {
+			pathsSet["."] = struct{}{}
+		} else {
+			pathsSet[d] = struct{}{}
+		}
+	}
+	var paths []string
+	for k := range pathsSet {
+		paths = append(paths, k)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return r.Sparse(paths)
+}
+
 // Config runs git config.
 func (r *Repo) Config(key, value string) error {
 	logrus.Infof("Running git config %s %s", key, value)
@@ -964,8 +975,40 @@ func (r *Repo) DisablePartialClone() error {
 	if b, err := co.CombinedOutput(); err != nil {
 		return fmt.Errorf("disable promisor failed: %v. output: %s", err, string(b))
 	}
+	co = r.gitCommand("config", "--local", "--unset-all", "remote.origin.promisor")
+	_, _ = co.CombinedOutput()
 	co = r.gitCommand("config", "--unset-all", "remote.origin.partialclonefilter")
 	_, _ = co.CombinedOutput()
+	co = r.gitCommand("config", "--local", "--unset-all", "extensions.partialclone")
+	_, _ = co.CombinedOutput()
+	return nil
+}
+
+func (r *Repo) fetchRefspecRobust(remote, refspec string) error {
+	if fb, ferr := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspec); ferr != nil {
+		out := string(fb)
+		if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") ||
+			strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
+			if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote, refspec); ferr2 != nil {
+				_ = r.DisablePartialClone()
+				if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote, refspec); ferr3 != nil {
+					logrus.WithFields(logrus.Fields{
+						"dir":     r.dir,
+						"remote":  remote,
+						"refspec": refspec,
+					}).Errorf("fetch refspec robust failed: %v, output: %s", ferr3, string(fb3))
+					return fmt.Errorf("fetch %s with %s failed: %v. output: %s", remote, refspec, ferr3, string(fb3))
+				}
+			}
+		} else {
+			logrus.WithFields(logrus.Fields{
+				"dir":     r.dir,
+				"remote":  remote,
+				"refspec": refspec,
+			}).Errorf("fetch refspec failed: %v, output: %s", ferr, out)
+			return fmt.Errorf("fetch %s with %s failed: %v. output: %s", remote, refspec, ferr, out)
+		}
+	}
 	return nil
 }
 
