@@ -608,6 +608,23 @@ func (r *Repo) Checkout(commitLike string) error {
 		// explicit refspec to ensure remote-tracking reference exists locally
 		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
 		if ferr := r.fetchRefspecRobust(remote, refspec); ferr != nil {
+			if remote == "origin" && r.RemoteBranchExistsIn("upstream", branch) {
+				refspec2 := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, "upstream", branch)
+				if ferr2 := r.fetchRefspecRobust("upstream", refspec2); ferr2 != nil {
+					logrus.WithFields(logrus.Fields{
+						"dir":     r.dir,
+						"remote":  remote,
+						"branch":  branch,
+						"refspec": refspec,
+					}).Errorf("fetch remote branch before checkout failed: %v", ferr)
+					return fmt.Errorf("fetch %s/%s failed: %v", remote, branch, ferr)
+				}
+				co := r.gitCommand("checkout", "-B", branch, "upstream/"+branch)
+				if b, err := co.CombinedOutput(); err != nil {
+					return fmt.Errorf("error checking out %s: %v. output: %s", commitLike, err, string(b))
+				}
+				return nil
+			}
 			logrus.WithFields(logrus.Fields{
 				"dir":     r.dir,
 				"remote":  remote,
@@ -885,15 +902,14 @@ func (r *Repo) FetchPullRequest(number string) error {
 	if r.user != "" && r.pass != "" {
 		remote = fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, r.owner, r.repo)
 	}
-	if b, err := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspecPull); err == nil {
+	if err := r.fetchRefspecRobust(remote, refspecPull); err == nil {
 		return nil
-	} else {
-		logrus.WithError(err).Warnf("Failed to fetch with refs/pull for PR %s, trying with refs/merge-requests. Output: %s", number, string(b))
 	}
+	logrus.Infof("Trying refs/merge-requests for PR %s.", number)
 
 	refspecMerge := fmt.Sprintf("+refs/merge-requests/%s/head:refs/remotes/origin/merge-requests/%s", number, number)
-	if b, err := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--filter=blob:none", remote, refspecMerge); err != nil {
-		return fmt.Errorf("git fetch failed for PR %s with both refs/pull and refs/merge-requests: %v. output: %s", number, err, string(b))
+	if err := r.fetchRefspecRobust(remote, refspecMerge); err != nil {
+		return fmt.Errorf("git fetch failed for PR %s with both refs/pull and refs/merge-requests: %v", number, err)
 	}
 	return nil
 }
