@@ -144,7 +144,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 
 		remote := fmt.Sprintf("%s/%s.git", base, fullName)
 		if largeRepos[owner+"/"+repo] {
-			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--filter=blob:none", "--depth", "50", remote, dir); err2 != nil {
+			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", remote, dir); err2 != nil {
 				out := string(b)
 				if strings.Contains(out, "destination path") && strings.Contains(out, "already exists") {
 					if _, e := os.Stat(filepath.Join(dir, ".git")); e == nil {
@@ -160,7 +160,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 							}
 						}
 					} else {
-						args := []string{"clone", "--no-tags", "--single-branch", "--filter=blob:none", "--depth", "50", util.DeSecret(remote), dir}
+						args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
 						logrus.WithFields(logrus.Fields{
 							"remote": util.DeSecret(remote),
 							"dir":    dir,
@@ -175,7 +175,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 							_ = os.MkdirAll(dir, os.ModePerm)
 						}
 						if _, e := retryCmd(dir, c.git, "init"); e != nil {
-							args := []string{"clone", "--no-tags", "--single-branch", "--filter=blob:none", "--depth", "50", util.DeSecret(remote), dir}
+							args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
 							logrus.WithFields(logrus.Fields{
 								"remote": util.DeSecret(remote),
 								"dir":    dir,
@@ -202,7 +202,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 						}
 					}
 				} else {
-					args := []string{"clone", "--no-tags", "--single-branch", "--filter=blob:none", "--depth", "50", util.DeSecret(remote), dir}
+					args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
 					logrus.WithFields(logrus.Fields{
 						"remote": util.DeSecret(remote),
 						"dir":    dir,
