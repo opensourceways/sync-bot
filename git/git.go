@@ -100,41 +100,54 @@ func (c *Client) PrewarmLargeRepos() error {
 				base = fmt.Sprintf("https://%s:%s@%s", user, pass, c.host)
 			}
 			remote := fmt.Sprintf("%s/%s.git", base, fullName)
+			// Prewarm with full clone using init+fetch to allow retries without cleaning up large data
 			logrus.WithFields(logrus.Fields{
 				"remote": util.DeSecret(remote),
 				"dir":    dir,
-			}).Infof("Prewarm clone (depth 50, blobless) for large repo %s", fullName)
-			if err2 := os.MkdirAll(filepath.Dir(dir), os.ModePerm); err2 != nil && !os.IsExist(err2) {
+			}).Infof("Prewarm full clone (init+fetch) for large repo %s", fullName)
+
+			if err2 := os.MkdirAll(dir, os.ModePerm); err2 != nil && !os.IsExist(err2) {
 				return fmt.Errorf("mkdir for prewarm failed: %v", err2)
 			}
-			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", "--filter=blob:none", remote, dir); err2 != nil {
-				out := string(b)
-				if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "invalid index-pack output") {
-					logrus.WithFields(logrus.Fields{
-						"remote": util.DeSecret(remote),
-						"dir":    dir,
-					}).Warnf("Prewarm clone (depth 50, blobless) failed, retrying with depth 1: %v", err2)
 
-					_ = os.RemoveAll(dir)
-					if b2, err3 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "1", "--filter=blob:none", remote, dir); err3 != nil {
-						logrus.WithFields(logrus.Fields{
-							"remote": util.DeSecret(remote),
-							"dir":    dir,
-						}).Errorf("Prewarm clone (depth 1, blobless) failed: %v, output: %s", err3, string(b2))
-						return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err3, string(b2))
-					}
-					// Try to deepen to 50 if possible, but don't fail if it fails
-					if _, errFetch := retryCmd(dir, c.git, "fetch", "--depth", "50"); errFetch != nil {
-						logrus.Warnf("Failed to deepen prewarm clone to 50: %v", errFetch)
-					}
-				} else {
-					logrus.WithFields(logrus.Fields{
-						"remote": util.DeSecret(remote),
-						"dir":    dir,
-					}).Errorf("Prewarm clone failed: %v, output: %s", err2, out)
-					return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err2, out)
-				}
+			// Initialize repo
+			if _, errInit := retryCmd(dir, c.git, "init"); errInit != nil {
+				return fmt.Errorf("git init failed: %v", errInit)
 			}
+
+			// Configure for large repo performance
+			_, _ = retryCmd(dir, c.git, "config", "http.postBuffer", "524288000")
+			_, _ = retryCmd(dir, c.git, "config", "core.compression", "0")
+			// Disable gc during fetch to avoid overhead
+			_, _ = retryCmd(dir, c.git, "config", "gc.auto", "0")
+
+			// Add remote if not exists
+			if _, errRemote := retryCmd(dir, c.git, "remote", "add", "origin", remote); errRemote != nil {
+				// Ignore error if remote already exists (idempotent)
+				logrus.Debugf("remote add failed (might exist): %v", errRemote)
+			}
+
+			// Fetch with retries
+			// retryCmd handles retries. Since we use fetch, it resumes/retries gracefully.
+			if b, errFetch := retryCmd(dir, c.git, "fetch", "origin"); errFetch != nil {
+				out := string(b)
+				logrus.WithFields(logrus.Fields{
+					"remote": util.DeSecret(remote),
+					"dir":    dir,
+				}).Errorf("Prewarm full fetch failed: %v, output: %s", errFetch, out)
+				// Don't remove dir here, maybe partial fetch is useful?
+				// But for safety, if it fails completely, maybe we should?
+				// User wants "guarantee", so maybe keep it to allow manual intervention or future retries?
+				// Let's return error.
+				return fmt.Errorf("prewarm full fetch %s failed: %v, output: %s", fullName, errFetch, out)
+			}
+
+			// Try to checkout HEAD
+			_, _ = retryCmd(dir, c.git, "remote", "set-head", "origin", "--auto")
+			if b, errCo := retryCmd(dir, c.git, "checkout", "-f", "origin/HEAD"); errCo != nil {
+				logrus.Warnf("Prewarm checkout failed (non-fatal): %v, output: %s", errCo, string(b))
+			}
+
 			// proactively disable partial clone flags if any
 			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
 			_ = r.DisablePartialClone()
@@ -199,73 +212,32 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 
 		remote := fmt.Sprintf("%s/%s.git", base, fullName)
 		if largeRepos[owner+"/"+repo] {
-			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", "--filter=blob:none", remote, dir); err2 != nil {
-				out := string(b)
-				if strings.Contains(out, "destination path") && strings.Contains(out, "already exists") {
-					if _, e := os.Stat(filepath.Join(dir, ".git")); e == nil {
-						logrus.Infof("Path exists for %s, switching to fetch.", fullName)
-						if bf, ef := retryCmd(dir, c.git, "fetch"); ef != nil {
-							return nil, fmt.Errorf("git fetch error: %v. output: %s", ef, string(bf))
-						}
-						if hb, _ := retryCmd(dir, c.git, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); len(hb) > 0 {
-							h := strings.TrimSpace(string(hb))
-							h = strings.TrimPrefix(h, "origin/")
-							if h != "" {
-								_, _ = retryCmd(dir, c.git, "checkout", "-B", h, "origin/"+h)
-							}
-						}
-					} else {
-						args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
-						logrus.WithFields(logrus.Fields{
-							"remote": util.DeSecret(remote),
-							"dir":    dir,
-							"args":   args,
-							"type":   "destination_exists",
-						}).Errorf("Clone failed: %v, output: %s", err2, out)
-						return nil, fmt.Errorf("git clone failed (destination exists), err: %v, output: %s", err2, out)
-					}
-				} else if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") {
-					if b2, err3 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "1", "--filter=blob:none", remote, dir); err3 != nil {
-						if _, e := os.Stat(dir); e != nil {
-							_ = os.MkdirAll(dir, os.ModePerm)
-						}
-						if _, e := retryCmd(dir, c.git, "init"); e != nil {
-							args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
-							logrus.WithFields(logrus.Fields{
-								"remote": util.DeSecret(remote),
-								"dir":    dir,
-								"args":   args,
-								"type":   "rpc_failed_init_error",
-							}).Errorf("Clone failed: %v, output: %s", err3, string(b2))
-							return nil, fmt.Errorf("git clone failed (rpc), init error: %v, output: %s", err3, string(b2))
-						}
-						if _, e := retryCmd(dir, c.git, "remote", "add", "origin", remote); e != nil {
-							logrus.WithFields(logrus.Fields{
-								"remote": util.DeSecret(remote),
-								"dir":    dir,
-								"type":   "rpc_failed_add_remote_error",
-							}).Errorf("Add remote failed: %v", e)
-							return nil, fmt.Errorf("git clone failed (rpc), add remote error: %v", e)
-						}
-						if bf, ef := retryCmd(dir, c.git, "fetch", "--no-tags", "--depth", "1", "origin"); ef != nil {
-							logrus.WithFields(logrus.Fields{
-								"remote": util.DeSecret(remote),
-								"dir":    dir,
-								"type":   "rpc_failed_fetch_error",
-							}).Errorf("Fetch failed: %v, output: %s", ef, string(bf))
-							return nil, fmt.Errorf("git fetch failed (rpc), err: %v, output: %s", ef, string(bf))
-						}
-					}
-				} else {
-					args := []string{"clone", "--no-tags", "--single-branch", "--depth", "50", util.DeSecret(remote), dir}
-					logrus.WithFields(logrus.Fields{
-						"remote": util.DeSecret(remote),
-						"dir":    dir,
-						"args":   args,
-						"type":   "unknown_clone_error",
-					}).Errorf("Clone failed: %v, output: %s", err2, out)
-					return nil, fmt.Errorf("git clone failed, err: %v, output: %s", err2, out)
-				}
+			// Use init+fetch pattern for large repos to support retries and resuming
+			if err := os.MkdirAll(dir, os.ModePerm); err != nil && !os.IsExist(err) {
+				return nil, fmt.Errorf("mkdir failed: %v", err)
+			}
+
+			if _, err := retryCmd(dir, c.git, "init"); err != nil {
+				return nil, fmt.Errorf("git init failed: %v", err)
+			}
+
+			// Configs for performance and reliability
+			_, _ = retryCmd(dir, c.git, "config", "http.postBuffer", "524288000")
+			_, _ = retryCmd(dir, c.git, "config", "core.compression", "0")
+			_, _ = retryCmd(dir, c.git, "config", "gc.auto", "0")
+
+			// Add remote (ignore error if exists)
+			_, _ = retryCmd(dir, c.git, "remote", "add", "origin", remote)
+
+			// Fetch (retriable, resumable)
+			if b, err := retryCmd(dir, c.git, "fetch", "origin"); err != nil {
+				return nil, fmt.Errorf("git fetch failed: %v, output: %s", err, string(b))
+			}
+
+			// Checkout HEAD
+			_, _ = retryCmd(dir, c.git, "remote", "set-head", "origin", "--auto")
+			if b, err := retryCmd(dir, c.git, "checkout", "-f", "origin/HEAD"); err != nil {
+				logrus.Warnf("Clone checkout failed (non-fatal): %v, output: %s", err, string(b))
 			}
 		} else if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", remote, dir); err2 != nil {
 			out := string(b)
