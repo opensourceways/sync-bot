@@ -100,7 +100,6 @@ func (c *Client) PrewarmLargeRepos() error {
 				base = fmt.Sprintf("https://%s:%s@%s", user, pass, c.host)
 			}
 			remote := fmt.Sprintf("%s/%s.git", base, fullName)
-			// Prewarm with full clone using init+fetch to allow retries without cleaning up large data
 			logrus.WithFields(logrus.Fields{
 				"remote": util.DeSecret(remote),
 				"dir":    dir,
@@ -110,46 +109,32 @@ func (c *Client) PrewarmLargeRepos() error {
 				return fmt.Errorf("mkdir for prewarm failed: %v", err2)
 			}
 
-			// Initialize repo
 			if _, errInit := retryCmd(dir, c.git, "init"); errInit != nil {
 				return fmt.Errorf("git init failed: %v", errInit)
 			}
 
-			// Configure for large repo performance
 			_, _ = retryCmd(dir, c.git, "config", "http.postBuffer", "524288000")
 			_, _ = retryCmd(dir, c.git, "config", "core.compression", "0")
-			// Disable gc during fetch to avoid overhead
 			_, _ = retryCmd(dir, c.git, "config", "gc.auto", "0")
 
-			// Add remote if not exists
 			if _, errRemote := retryCmd(dir, c.git, "remote", "add", "origin", remote); errRemote != nil {
-				// Ignore error if remote already exists (idempotent)
 				logrus.Debugf("remote add failed (might exist): %v", errRemote)
 			}
 
-			// Fetch with retries
-			// retryCmd handles retries. Since we use fetch, it resumes/retries gracefully.
-			if b, errFetch := retryCmd(dir, c.git, "fetch", "origin"); errFetch != nil {
-				out := string(b)
+			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
+			if errFetch := r.FetchRemoteRobust("origin"); errFetch != nil {
 				logrus.WithFields(logrus.Fields{
 					"remote": util.DeSecret(remote),
 					"dir":    dir,
-				}).Errorf("Prewarm full fetch failed: %v, output: %s", errFetch, out)
-				// Don't remove dir here, maybe partial fetch is useful?
-				// But for safety, if it fails completely, maybe we should?
-				// User wants "guarantee", so maybe keep it to allow manual intervention or future retries?
-				// Let's return error.
-				return fmt.Errorf("prewarm full fetch %s failed: %v, output: %s", fullName, errFetch, out)
+				}).Errorf("Prewarm full fetch failed: %v", errFetch)
+				return fmt.Errorf("prewarm full fetch %s failed: %v", fullName, errFetch)
 			}
 
-			// Try to checkout HEAD
 			_, _ = retryCmd(dir, c.git, "remote", "set-head", "origin", "--auto")
 			if b, errCo := retryCmd(dir, c.git, "checkout", "-f", "origin/HEAD"); errCo != nil {
 				logrus.Warnf("Prewarm checkout failed (non-fatal): %v, output: %s", errCo, string(b))
 			}
 
-			// proactively disable partial clone flags if any
-			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
 			_ = r.DisablePartialClone()
 			logrus.Infof("repo: %s is finshed", r.repo)
 		}
@@ -212,7 +197,6 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 
 		remote := fmt.Sprintf("%s/%s.git", base, fullName)
 		if largeRepos[owner+"/"+repo] {
-			// Use init+fetch pattern for large repos to support retries and resuming
 			if err := os.MkdirAll(dir, os.ModePerm); err != nil && !os.IsExist(err) {
 				return nil, fmt.Errorf("mkdir failed: %v", err)
 			}
@@ -221,20 +205,26 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 				return nil, fmt.Errorf("git init failed: %v", err)
 			}
 
-			// Configs for performance and reliability
 			_, _ = retryCmd(dir, c.git, "config", "http.postBuffer", "524288000")
 			_, _ = retryCmd(dir, c.git, "config", "core.compression", "0")
 			_, _ = retryCmd(dir, c.git, "config", "gc.auto", "0")
 
-			// Add remote (ignore error if exists)
 			_, _ = retryCmd(dir, c.git, "remote", "add", "origin", remote)
 
-			// Fetch (retriable, resumable)
-			if b, err := retryCmd(dir, c.git, "fetch", "origin"); err != nil {
-				return nil, fmt.Errorf("git fetch failed: %v, output: %s", err, string(b))
+			r := &Repo{
+				dir:   dir,
+				git:   c.git,
+				host:  c.host,
+				base:  c.base,
+				owner: owner,
+				repo:  repo,
+				user:  user,
+				pass:  pass,
 			}
+			if err := r.FetchRemoteRobust("origin"); err != nil {
+				return nil, err
 
-			// Checkout HEAD
+			}
 			_, _ = retryCmd(dir, c.git, "remote", "set-head", "origin", "--auto")
 			if b, err := retryCmd(dir, c.git, "checkout", "-f", "origin/HEAD"); err != nil {
 				logrus.Warnf("Clone checkout failed (non-fatal): %v, output: %s", err, string(b))
@@ -1228,6 +1218,31 @@ func (r *Repo) fetchRefspecRobust(remote, refspec string) error {
 	return nil
 }
 
+func (r *Repo) FetchRemoteRobust(remote string) error {
+	if fb, ferr := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote); ferr != nil {
+		out := string(fb)
+		if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "504") ||
+			strings.Contains(out, "invalid index-pack output") || strings.Contains(out, "promisor remote") || strings.Contains(out, "could not fetch") {
+			if _, ferr2 := retryCmd(r.dir, r.git, "fetch", "--no-tags", "--depth", "1", remote); ferr2 != nil {
+				_ = r.DisablePartialClone()
+				if fb3, ferr3 := retryCmd(r.dir, r.git, "fetch", "--no-tags", remote); ferr3 != nil {
+					logrus.WithFields(logrus.Fields{
+						"dir":    r.dir,
+						"remote": remote,
+					}).Errorf("fetch remote robust failed: %v, output: %s", ferr3, string(fb3))
+					return fmt.Errorf("fetch %s failed: %v. output: %s", remote, ferr3, string(fb3))
+				}
+			}
+		} else {
+			logrus.WithFields(logrus.Fields{
+				"dir":    r.dir,
+				"remote": remote,
+			}).Errorf("fetch remote failed: %v, output: %s", ferr, out)
+			return fmt.Errorf("fetch %s failed: %v. output: %s", remote, ferr, out)
+		}
+	}
+	return nil
+}
 func (r *Repo) ensureIdentity() error {
 	getName := r.gitCommand("config", "--get", "user.name")
 	n, ne := getName.CombinedOutput()
