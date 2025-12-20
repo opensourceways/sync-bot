@@ -501,12 +501,23 @@ func (r *Repo) CheckoutRemoteBySHA(remote, branch string) error {
 	rev := r.gitCommand("rev-parse", remote+"/"+branch)
 	b, e := rev.CombinedOutput()
 	if e != nil {
+		logrus.WithFields(logrus.Fields{
+			"dir":    r.dir,
+			"remote": remote,
+			"branch": branch,
+		}).Errorf("rev-parse failed: %v, output: %s", e, string(b))
 		return fmt.Errorf("rev-parse %s/%s failed: %v. output: %s", remote, branch, e, string(b))
 	}
 	sha := strings.TrimSpace(string(b))
+	logrus.Infof("Checkout %s/%s (sha: %s)", remote, branch, sha)
 	co := r.gitCommand("checkout", "-B", branch, sha)
 	out, err := co.CombinedOutput()
 	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"dir":    r.dir,
+			"branch": branch,
+			"sha":    sha,
+		}).Errorf("checkout -B failed: %v, output: %s", err, string(out))
 		return fmt.Errorf("checkout -B %s by sha %s failed: %v. output: %s", branch, sha, err, string(out))
 	}
 	return nil

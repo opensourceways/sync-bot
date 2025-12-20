@@ -220,6 +220,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 				}
 				err = r.CheckoutRemoteBySHA("origin", branch)
 				if err != nil {
+					logrus.Errorf("CheckoutRemoteBySHA failed: %v", err)
 					status = append(status, syncStatus{
 						Name:   branch,
 						Status: checkoutFailed,
