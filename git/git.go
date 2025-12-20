@@ -513,12 +513,39 @@ func (r *Repo) CheckoutRemoteBySHA(remote, branch string) error {
 	co := r.gitCommand("checkout", "-B", branch, sha)
 	out, err := co.CombinedOutput()
 	if err != nil {
+		outStr := string(out)
+		if strings.Contains(outStr, "invalid index-pack output") || strings.Contains(outStr, "promisor remote") || strings.Contains(outStr, "could not fetch") {
+			logrus.WithFields(logrus.Fields{
+				"dir":    r.dir,
+				"branch": branch,
+				"sha":    sha,
+			}).Warnf("checkout failed with fetch error, attempting to fetch commit %s directly", sha)
+
+			// Try to fetch the specific commit with depth 1 (which includes blobs)
+			// We use retryCmd to handle transient network issues
+			if _, fetchErr := retryCmd(r.dir, r.git, "fetch", remote, sha, "--depth=1"); fetchErr != nil {
+				logrus.WithFields(logrus.Fields{
+					"dir": r.dir,
+					"sha": sha,
+				}).Errorf("fetch commit failed: %v", fetchErr)
+			} else {
+				// Retry checkout after fetch
+				co2 := r.gitCommand("checkout", "-B", branch, sha)
+				if out2, err2 := co2.CombinedOutput(); err2 == nil {
+					return nil
+				} else {
+					outStr = string(out2)
+					err = err2
+				}
+			}
+		}
+
 		logrus.WithFields(logrus.Fields{
 			"dir":    r.dir,
 			"branch": branch,
 			"sha":    sha,
-		}).Errorf("checkout -B failed: %v, output: %s", err, string(out))
-		return fmt.Errorf("checkout -B %s by sha %s failed: %v. output: %s", branch, sha, err, string(out))
+		}).Errorf("checkout -B failed: %v, output: %s", err, outStr)
+		return fmt.Errorf("checkout -B %s by sha %s failed: %v. output: %s", branch, sha, err, outStr)
 	}
 	return nil
 }
