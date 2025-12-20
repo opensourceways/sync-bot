@@ -470,6 +470,22 @@ func (r *Repo) FetchUpstream(branch string) error {
 	return nil
 }
 
+// FetchOrigin fetch the origin branch to local
+func (r *Repo) FetchOrigin(branch string) error {
+	logrus.Infof("fetch origin branch %s", branch)
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	if ferr := r.fetchRefspecRobust("origin", refspec); ferr != nil {
+		logrus.WithFields(logrus.Fields{
+			"dir":     r.dir,
+			"branch":  branch,
+			"refspec": refspec,
+		}).Errorf("git fetch origin failed: %v", ferr)
+		return fmt.Errorf("git fetch origin %s failed: %v", branch, ferr)
+	}
+
+	return nil
+}
+
 func (r *Repo) FetchUpstreamFull(branch string) error {
 	logrus.Infof("fetch upstream branch %s with full history", branch)
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/upstream/%s", branch, branch)

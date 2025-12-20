@@ -211,6 +211,13 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 				}
 			} else {
 				_ = r.Clean()
+				if err := r.FetchOrigin(branch); err != nil {
+					status = append(status, syncStatus{
+						Name:   branch,
+						Status: pullFailed,
+					})
+					continue
+				}
 				err = r.CheckoutRemoteBySHA("origin", branch)
 				if err != nil {
 					status = append(status, syncStatus{
