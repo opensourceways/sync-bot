@@ -127,7 +127,30 @@ func (c *Client) PrewarmLargeRepos() error {
 					"remote": util.DeSecret(remote),
 					"dir":    dir,
 				}).Errorf("Prewarm full fetch failed: %v", errFetch)
-				return fmt.Errorf("prewarm full fetch %s failed: %v", fullName, errFetch)
+				// fallback: if LiYanghang00/kernel fails, try openFuyao-test/kernel as mirror to populate objects
+				if fullName == "LiYanghang00/kernel" {
+					fallbackFull := "openFuyao-test/kernel"
+					fallbackRemote := fmt.Sprintf("%s/%s.git", base, fallbackFull)
+					logrus.WithFields(logrus.Fields{
+						"mirror": util.DeSecret(fallbackRemote),
+						"dir":    dir,
+					}).Warnf("Attempt mirror fallback for %s", fullName)
+					_, _ = retryCmd(dir, c.git, "remote", "add", "mirror", fallbackRemote)
+					refspec := "+refs/heads/*:refs/remotes/mirror/*"
+					// fetch heads from mirror to populate objects
+					if ferr := r.fetchRefspecRobust("mirror", refspec); ferr != nil {
+						logrus.WithFields(logrus.Fields{
+							"mirror":  util.DeSecret(fallbackRemote),
+							"dir":     dir,
+							"refspec": refspec,
+						}).Errorf("Mirror fetch failed: %v", ferr)
+						return fmt.Errorf("prewarm full fetch %s failed: %v", fullName, errFetch)
+					}
+					// cleanup mirror remote, keep origin
+					_, _ = retryCmd(dir, c.git, "remote", "remove", "mirror")
+				} else {
+					return fmt.Errorf("prewarm full fetch %s failed: %v", fullName, errFetch)
+				}
 			}
 
 			_, _ = retryCmd(dir, c.git, "remote", "set-head", "origin", "--auto")
@@ -463,12 +486,27 @@ func (r *Repo) CheckoutRemoteBySHA(remote, branch string) error {
 	rev := r.gitCommand("rev-parse", remote+"/"+branch)
 	b, e := rev.CombinedOutput()
 	if e != nil {
-		logrus.WithFields(logrus.Fields{
-			"dir":    r.dir,
-			"remote": remote,
-			"branch": branch,
-		}).Errorf("rev-parse failed: %v, output: %s", e, string(b))
-		return fmt.Errorf("rev-parse %s/%s failed: %v. output: %s", remote, branch, e, string(b))
+		out := string(b)
+		refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
+		if ferr := r.fetchRefspecRobust(remote, refspec); ferr != nil {
+			logrus.WithFields(logrus.Fields{
+				"dir":     r.dir,
+				"remote":  remote,
+				"branch":  branch,
+				"refspec": refspec,
+			}).Errorf("fetch before rev-parse failed: %v", ferr)
+			return fmt.Errorf("rev-parse %s/%s failed: %v. output: %s", remote, branch, e, out)
+		}
+		b2, e2 := r.gitCommand("rev-parse", remote+"/"+branch).CombinedOutput()
+		if e2 != nil {
+			logrus.WithFields(logrus.Fields{
+				"dir":    r.dir,
+				"remote": remote,
+				"branch": branch,
+			}).Errorf("rev-parse after fetch failed: %v, output: %s", e2, string(b2))
+			return fmt.Errorf("rev-parse %s/%s failed: %v. output: %s", remote, branch, e2, string(b2))
+		}
+		b = b2
 	}
 	sha := strings.TrimSpace(string(b))
 	logrus.Infof("Checkout %s/%s (sha: %s)", remote, branch, sha)
@@ -957,6 +995,17 @@ func (r *Repo) CherryPick(first, last string, strategyOption StrategyOption) err
 		"range":    rangeArg,
 		"strategy": string(strategyOption),
 	}).Errorf("Cherry pick failed: %v, output: %q", err, outStr)
+	// fetch missing commits when bad revision
+	if strings.Contains(outStr, "bad revision") {
+		_, _ = retryCmd(r.dir, r.git, "fetch", "origin", first, "--depth=1")
+		_, _ = retryCmd(r.dir, r.git, "fetch", "origin", last, "--depth=1")
+		co4 := r.gitCommand(args...)
+		out4, err4 := co4.CombinedOutput()
+		if err4 == nil {
+			return nil
+		}
+		outStr = string(out4)
+	}
 	// handle dirty working tree
 	if strings.Contains(outStr, "would be overwritten by cherry-pick") {
 		_ = r.gitCommand("cherry-pick", "--abort").Run()
@@ -1082,17 +1131,13 @@ func (r *Repo) DeleteRemoteBranch(branch string) error {
 func (r *Repo) FetchPullRequest(number string) error {
 	logrus.Infof("Fetching %s/%s#%s.", r.owner, r.repo, number)
 	refspecPull := fmt.Sprintf("+refs/pull/%s/head:refs/remotes/origin/pull/%s", number, number)
-	remote := r.base + "/" + r.owner + "/" + r.repo
-	if r.user != "" && r.pass != "" {
-		remote = fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, r.owner, r.repo)
-	}
-	if err := r.fetchRefspecRobust(remote, refspecPull); err == nil {
+	if err := r.fetchRefspecRobust("origin", refspecPull); err == nil {
 		return nil
 	}
 	logrus.Infof("Trying refs/merge-requests for PR %s.", number)
 
 	refspecMerge := fmt.Sprintf("+refs/merge-requests/%s/head:refs/remotes/origin/merge-requests/%s", number, number)
-	if err := r.fetchRefspecRobust(remote, refspecMerge); err != nil {
+	if err := r.fetchRefspecRobust("origin", refspecMerge); err != nil {
 		return fmt.Errorf("git fetch failed for PR %s with both refs/pull and refs/merge-requests: %v", number, err)
 	}
 	return nil
