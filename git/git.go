@@ -103,16 +103,37 @@ func (c *Client) PrewarmLargeRepos() error {
 			logrus.WithFields(logrus.Fields{
 				"remote": util.DeSecret(remote),
 				"dir":    dir,
-			}).Infof("Prewarm full clone for large repo %s", fullName)
+			}).Infof("Prewarm clone (depth 50, blobless) for large repo %s", fullName)
 			if err2 := os.MkdirAll(filepath.Dir(dir), os.ModePerm); err2 != nil && !os.IsExist(err2) {
 				return fmt.Errorf("mkdir for prewarm failed: %v", err2)
 			}
-			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", remote, dir); err2 != nil {
-				logrus.WithFields(logrus.Fields{
-					"remote": util.DeSecret(remote),
-					"dir":    dir,
-				}).Errorf("Prewarm clone failed: %v, output: %s", err2, string(b))
-				return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err2, string(b))
+			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", "--filter=blob:none", remote, dir); err2 != nil {
+				out := string(b)
+				if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") || strings.Contains(out, "invalid index-pack output") {
+					logrus.WithFields(logrus.Fields{
+						"remote": util.DeSecret(remote),
+						"dir":    dir,
+					}).Warnf("Prewarm clone (depth 50, blobless) failed, retrying with depth 1: %v", err2)
+
+					_ = os.RemoveAll(dir)
+					if b2, err3 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "1", "--filter=blob:none", remote, dir); err3 != nil {
+						logrus.WithFields(logrus.Fields{
+							"remote": util.DeSecret(remote),
+							"dir":    dir,
+						}).Errorf("Prewarm clone (depth 1, blobless) failed: %v, output: %s", err3, string(b2))
+						return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err3, string(b2))
+					}
+					// Try to deepen to 50 if possible, but don't fail if it fails
+					if _, errFetch := retryCmd(dir, c.git, "fetch", "--depth", "50"); errFetch != nil {
+						logrus.Warnf("Failed to deepen prewarm clone to 50: %v", errFetch)
+					}
+				} else {
+					logrus.WithFields(logrus.Fields{
+						"remote": util.DeSecret(remote),
+						"dir":    dir,
+					}).Errorf("Prewarm clone failed: %v, output: %s", err2, out)
+					return fmt.Errorf("prewarm clone %s failed: %v, output: %s", fullName, err2, out)
+				}
 			}
 			// proactively disable partial clone flags if any
 			r := &Repo{dir: dir, git: c.git, host: c.host, base: c.base, owner: strings.Split(fullName, "/")[0], repo: strings.Split(fullName, "/")[1], user: user, pass: pass}
@@ -178,7 +199,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 
 		remote := fmt.Sprintf("%s/%s.git", base, fullName)
 		if largeRepos[owner+"/"+repo] {
-			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", remote, dir); err2 != nil {
+			if b, err2 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "50", "--filter=blob:none", remote, dir); err2 != nil {
 				out := string(b)
 				if strings.Contains(out, "destination path") && strings.Contains(out, "already exists") {
 					if _, e := os.Stat(filepath.Join(dir, ".git")); e == nil {
@@ -204,7 +225,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 						return nil, fmt.Errorf("git clone failed (destination exists), err: %v, output: %s", err2, out)
 					}
 				} else if strings.Contains(out, "RPC failed") || strings.Contains(out, "expected 'packfile'") {
-					if b2, err3 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "1", remote, dir); err3 != nil {
+					if b2, err3 := retryCmd("", c.git, "clone", "--no-tags", "--single-branch", "--depth", "1", "--filter=blob:none", remote, dir); err3 != nil {
 						if _, e := os.Stat(dir); e != nil {
 							_ = os.MkdirAll(dir, os.ModePerm)
 						}
