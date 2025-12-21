@@ -14,13 +14,3 @@ const (
 	pushFailed         = "推送失败"
 	createPRFailed     = "创建 PR 失败"
 )
-
-func GetSyncProjectOfOpenEuler() map[string]bool {
-	return map[string]bool{
-		"kernel":               true,
-		"docs":                 true,
-		"yocto-meta-openeuler": true,
-		"hikptool":             true,
-		"umdk":                 true,
-	}
-}

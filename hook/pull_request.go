@@ -116,7 +116,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		}
 
 		// pull for big repos by using upstream repos
-		if org == "openFuyao-test" && repo == "kernel" {
+		if org == "openEuler" && repo == "kernel" {
 			bigRemote := fmt.Sprintf("%s/%s.git", "https://gitcode.com", org+"/"+repo)
 
 			// check remote
@@ -258,7 +258,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			})
 			continue
 		}
-		if org == "openFuyao-test" && repo == "kernel" {
+		if org == "openEuler" && repo == "kernel" {
 			_ = r.SparseForRange(firstSha, lastSha)
 		}
 		err = r.CherryPick(firstSha, lastSha, git.Theirs)
@@ -281,7 +281,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		var num int
 		sleepyTime := time.Second
 
-		if org == "openFuyao-test" && repo == "kernel" {
+		if org == "openEuler" && repo == "kernel" {
 			tempBranch = "LiYanghang00:" + tempBranch
 			forkPath = fmt.Sprintf("%s/%s", "LiYanghang00", repo)
 		}
@@ -420,7 +420,7 @@ func (bot *robot) sync(evt *client.GenericEvent, user string, command string, lo
 
 	var body string
 	var data interface{}
-	if org == "openFuyao-test" && repo == "kernel" {
+	if org == "openEuler" && repo == "kernel" {
 		data = struct {
 			PR   string
 			Body string

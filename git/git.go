@@ -38,8 +38,7 @@ const repoPath = "repos"
 const gitcode = "gitcode.com"
 
 var largeRepos = map[string]bool{
-	"openFuyao-test/kernel": true,
-	"LiYanghang00/kernel":   true,
+	"LiYanghang00/kernel": true,
 }
 
 // Client can clone repos. It keeps a local cache, so successive clones of the
@@ -129,7 +128,7 @@ func (c *Client) PrewarmLargeRepos() error {
 				}).Errorf("Prewarm full fetch failed: %v", errFetch)
 				// fallback: if LiYanghang00/kernel fails, try openFuyao-test/kernel as mirror to populate objects
 				if fullName == "LiYanghang00/kernel" {
-					fallbackFull := "openFuyao-test/kernel"
+					fallbackFull := "openEuler/kernel"
 					fallbackRemote := fmt.Sprintf("%s/%s.git", base, fallbackFull)
 					logrus.WithFields(logrus.Fields{
 						"mirror": util.DeSecret(fallbackRemote),
@@ -214,7 +213,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 		}
 
 		// special for big size repos
-		if owner == "openFuyao-test" && repo == "kernel" {
+		if owner == "openEuler" && repo == "kernel" {
 			fullName = "Liyanghang00" + "/" + repo
 		}
 
@@ -327,7 +326,7 @@ func (c *Client) Clone(owner, repo string) (*Repo, error) {
 		return nil, err
 	} else {
 
-		if owner == "openFuyao-test" && repo == "kernel" {
+		if owner == "openEuler" && repo == "kernel" {
 			return &Repo{
 				dir:   dir,
 				git:   c.git,
@@ -1079,7 +1078,7 @@ func (r *Repo) Push(branch string, force bool) error {
 	remote := fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, r.owner, r.repo)
 
 	// check if repo is one of the big repos
-	if r.owner == "openFuyao-test" && r.repo == "kernel" {
+	if r.owner == "openEuler" && r.repo == "kernel" {
 		remote = fmt.Sprintf("https://%s:%s@%s/%s/%s", r.user, r.pass, r.host, "LiYanghang00", r.repo)
 	}
 
