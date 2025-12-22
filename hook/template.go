@@ -43,7 +43,7 @@ In response to [this]({{.URL}}):
 
 ### 2. Original pull request related issue(s):
 {{- range .Issues}}
-{{.HTMLURL}}
+{{.HtmlURL}}
 {{- end}}
 
 ### 3. Original pull request related commit(s):
