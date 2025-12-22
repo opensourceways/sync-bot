@@ -1300,7 +1300,7 @@ func (r *Repo) ensureIdentity() error {
 	e, ee := getEmail.CombinedOutput()
 	email := strings.TrimSpace(string(e))
 	if ee != nil || email == "" {
-		if err := r.Config("user.email", "sync-bot@local"); err != nil {
+		if err := r.Config("user.email", "infra@openeuler.sh"); err != nil {
 			return err
 		}
 	}
