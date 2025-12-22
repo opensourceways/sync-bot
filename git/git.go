@@ -1297,9 +1297,8 @@ func (r *Repo) ensureIdentity() error {
 		}
 	}
 	getEmail := r.gitCommand("config", "--get", "user.email")
-	e, ee := getEmail.CombinedOutput()
-	email := strings.TrimSpace(string(e))
-	if ee != nil || email == "" {
+	_, ee := getEmail.CombinedOutput()
+	if ee != nil {
 		if err := r.Config("user.email", "infra@openeuler.sh"); err != nil {
 			return err
 		}

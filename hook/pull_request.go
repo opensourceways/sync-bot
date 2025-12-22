@@ -278,7 +278,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			})
 			continue
 		}
-		var num int
+		var num string
 		sleepyTime := time.Second
 
 		if org == "openEuler" && repo == "kernel" {
@@ -299,7 +299,8 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 				PruneSourceBranch: &prune,
 				ForkPath:          &forkPath,
 			}
-			_, ok := bot.cli.CreatePR(org, repo, newPR)
+			var ok bool
+			num, ok = bot.cli.CreatePR(org, repo, newPR)
 			if !ok {
 				logrus.WithError(err).Infof("Create pull request: retrying %d times", i+1)
 				time.Sleep(sleepyTime)
@@ -316,7 +317,7 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		} else {
 			logrus.Infoln("Create PullRequest:", num)
 			st = createdPR
-			url = fmt.Sprintf("https://gitcode.com/%v/%v/pulls/%v", org, repo, num)
+			url = fmt.Sprintf("https://gitcode.com/%v/%v/merge_requests/%v", org, repo, num)
 		}
 		status = append(status, syncStatus{Name: branch, Status: st, PR: url})
 	}
@@ -367,7 +368,7 @@ func (bot *robot) merge(org string, repo string, opt *SyncCmdOption, branchSet m
 		} else {
 			logrus.Infoln("Create PullRequest:", num)
 			st = createdPR
-			url = fmt.Sprintf("https://gitcode.com/%v/%v/pulls/%v", org, repo, num)
+			url = fmt.Sprintf("https://gitcode.com/%v/%v/merge_requests/%v", org, repo, num)
 		}
 		status = append(status, syncStatus{Name: branch, Status: st, PR: url})
 	}
