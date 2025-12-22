@@ -417,7 +417,7 @@ func (bot *robot) sync(evt *client.GenericEvent, user string, command string, lo
 		branchSet[b.Name] = true
 	}
 
-	title := fmt.Sprintf("[sync] PR-%v: %v", number, pr.Title)
+	title := fmt.Sprintf("[sync] PR-%v: %v", number, utils.GetString(pr.Title))
 
 	var body string
 	var data interface{}
