@@ -1,8 +1,11 @@
 package rpm
 
 import (
+	"encoding/base64"
 	"regexp"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 // referred fields's key
@@ -19,11 +22,17 @@ type Spec struct {
 
 // NewSpec new a spec instance include information about a spec file
 func NewSpec(content string) *Spec {
+	decodedContent, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		// 处理解码错误
+		logrus.Errorf("Failed to decode file content: %v", err)
+		return nil
+	}
 	s := &Spec{
 		macros: make(map[string]string),
 		values: make(map[string]string),
 	}
-	s.lines = strings.Split(content, "\n")
+	s.lines = strings.Split(string(decodedContent), "\n")
 	s.parse()
 	return s
 }
