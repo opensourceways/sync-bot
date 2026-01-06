@@ -14,9 +14,6 @@
 package hook
 
 import (
-	"reflect"
-	"slices"
-
 	"sync-bot/git"
 	"sync-bot/util"
 
@@ -146,13 +143,5 @@ func (bot *robot) handlePREvent(evt *client.GenericEvent, repoCnfPtr any, logger
 }
 
 func (bot *robot) handlePullRequestCommentEvent(evt *client.GenericEvent, repoCnfPtr any, logger *logrus.Entry) {
-	org, repo := utils.GetString(evt.Org), utils.GetString(evt.Repo)
-	repoCnf := reflect.ValueOf(repoCnfPtr).Interface().(*repoConfig)
-
-	if !slices.Contains(repoCnf.Repos, repo) && !slices.Contains(repoCnf.Repos, org) {
-		logger.Infoln("Ignoring event for repo:", repo)
-		return
-	}
-
 	bot.NotePullRequest(evt, logger)
 }
