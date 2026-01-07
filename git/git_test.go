@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -46,12 +47,12 @@ func TestCherryPick(t *testing.T) {
 		t.Fatalf("Checkout new branch %v failed: %v", targetBranch, err)
 	}
 
-	err = r.FetchPullRequest(pr)
+	err = r.FetchPullRequest(strconv.Itoa(pr))
 	if err != nil {
 		t.Fatalf("Fetch pull request %v failed: %v", pr, err)
 	}
 
-	err = r.CherryPick("3d43f2fc", "43e0edbf", "ours")
+	err = r.CherryPick("3d43f2fc", "43e0edbf", Ours)
 	if err != nil {
 		t.Fatalf("Fetch pull request %v failed: %v", pr, err)
 	}
