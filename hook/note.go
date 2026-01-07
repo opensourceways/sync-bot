@@ -14,10 +14,17 @@ import (
 )
 
 func (bot *robot) greeting(org string, repo string, number string, targetBranch string, logger *logrus.Entry) {
-	branches, ok := bot.cli.GetRepoAllBranch(org, repo)
+	allBranches, ok := bot.cli.GetRepoAllBranch(org, repo)
 	if !ok {
 		logger.Errorf("Get Branches failed. org: %s, repo: %s, number: %s, targetBranch: %s", org, repo, number, targetBranch)
 		return
+	}
+
+	branches := make([]client.Branch, 0, len(allBranches))
+	for _, branch := range allBranches {
+		if !util.ContainsString(bot.cnf.DropBrancher, branch.Name) {
+			branches = append(branches, branch)
+		}
 	}
 	type branchExt struct {
 		Name, Version, Release string

@@ -22,6 +22,7 @@ type Configuration struct {
 	ConfigItems []repoConfig `json:"config_items,omitempty"`
 	// Community name used as a request parameter to getRepoConfig sig information.
 	LabelUsageDescriptionMap map[string]*LabelUsageDescription `json:"-"`
+	DropBrancher             []string                          `json:"drop_brancher"`
 	// Sig information url.
 	SigInfoURL string `json:"sig_info_url" required:"true"`
 	// Community name used as a request parameter to getRepoConfig sig information.

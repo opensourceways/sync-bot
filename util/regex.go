@@ -53,3 +53,13 @@ func MatchSecretURL(url string) bool {
 func DeSecret(url string) string {
 	return secretURL.ReplaceAllString(url, "$1******:******$2")
 }
+
+// ContainsString checks if a string is present in a slice of strings.
+func ContainsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
