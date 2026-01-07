@@ -231,6 +231,13 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 
 		} else {
 			_ = r.Clean()
+			if err := r.FetchOrigin(branch); err != nil {
+				status = append(status, syncStatus{
+					Name:   branch,
+					Status: pullFailed,
+				})
+				continue
+			}
 			err = r.CheckoutRemoteBySHA("origin", branch)
 			if err != nil {
 				status = append(status, syncStatus{
@@ -258,6 +265,16 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			})
 			continue
 		}
+		if hasLFS, lfsFiles, lerr := r.RangeHasLFS(firstSha, lastSha); lerr == nil && hasLFS {
+			logrus.WithFields(logrus.Fields{
+				"files": lfsFiles,
+			}).Warnln("Skip sync due to LFS tracked files in range")
+			status = append(status, syncStatus{
+				Name:   branch,
+				Status: lfsSkipped,
+			})
+			continue
+		}
 		if org == "openEuler" && repo == "kernel" {
 			_ = r.SparseForRange(firstSha, lastSha)
 		}
@@ -267,6 +284,21 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			status = append(status, syncStatus{
 				Name:   branch,
 				Status: syncFailed,
+			})
+			continue
+		}
+		empty, derr := r.IsDiffEmptyAgainst("origin/" + branch)
+		if derr != nil {
+			status = append(status, syncStatus{
+				Name:   branch,
+				Status: syncFailed,
+			})
+			continue
+		}
+		if empty {
+			status = append(status, syncStatus{
+				Name:   branch,
+				Status: emptyCherry,
 			})
 			continue
 		}

@@ -2,10 +2,12 @@
 package git
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -696,7 +698,19 @@ func (r *Repo) Status() (string, error) {
 	return string(b), nil
 }
 
-// Clean clean the repo.
+func (r *Repo) IsDiffEmptyAgainst(ref string) (bool, error) {
+	co := r.gitCommand("diff", "--quiet", ref)
+	err := co.Run()
+	if err == nil {
+		return true, nil
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return false, nil
+	}
+	return false, fmt.Errorf("git diff against %s failed: %v", ref, err)
+}
+
+// Clean the repo.
 func (r *Repo) Clean() error {
 	logrus.Infof("cancel possible intermediate state of cherry-pick")
 	co := r.gitCommand("cherry-pick", "--abort")
@@ -994,6 +1008,11 @@ func (r *Repo) CherryPick(first, last string, strategyOption StrategyOption) err
 		"range":    rangeArg,
 		"strategy": string(strategyOption),
 	}).Errorf("Cherry pick failed: %v, output: %q", err, outStr)
+	// empty cherry-pick: commit brings no changes, skip
+	if strings.Contains(outStr, "previous cherry-pick is now empty") || strings.Contains(outStr, "nothing to commit, working tree clean") {
+		_ = r.gitCommand("cherry-pick", "--skip").Run()
+		return nil
+	}
 	// fetch missing commits when bad revision
 	if strings.Contains(outStr, "bad revision") {
 		_, _ = retryCmd(r.dir, r.git, "fetch", "origin", first, "--depth=1")
@@ -1203,6 +1222,99 @@ func (r *Repo) SparseForRange(first, last string) error {
 		return nil
 	}
 	return r.Sparse(paths)
+}
+
+func (r *Repo) listFilesInRange(first, last string) ([]string, error) {
+	rangeArg := fmt.Sprintf("%s^..%s", first, last)
+	co := r.gitCommand("diff", "--name-only", rangeArg)
+	b, err := co.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only %s failed: %v, output: %s", rangeArg, err, string(b))
+	}
+	var files []string
+	for _, p := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files, nil
+}
+
+func (r *Repo) loadLFSPatterns() ([]string, error) {
+	attrPath := filepath.Join(r.dir, ".gitattributes")
+	f, err := os.Open(attrPath)
+	if err != nil {
+		return nil, nil
+	}
+	defer f.Close()
+	var patterns []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) == 0 {
+			continue
+		}
+		hasLFS := false
+		for _, tok := range parts[1:] {
+			if strings.Contains(tok, "filter=lfs") {
+				hasLFS = true
+				break
+			}
+		}
+		if hasLFS {
+			patterns = append(patterns, parts[0])
+		}
+	}
+	return patterns, nil
+}
+
+func (r *Repo) pathMatchesPattern(pat, file string) bool {
+	// support simple glob matching (*.ext, dir/*)
+	if ok, _ := filepath.Match(pat, file); ok {
+		return true
+	}
+	// if pattern is like *.ext and file is in subdir, filepath.Match covers it.
+	// support anchored path patterns without directories normalization
+	// also try base name match for patterns like *.ext
+	if strings.Contains(pat, "*") && !strings.Contains(pat, "/") {
+		if ok, _ := filepath.Match(pat, path.Base(file)); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Repo) rangeHasLFS(first, last string) (bool, []string, error) {
+	files, err := r.listFilesInRange(first, last)
+	if err != nil {
+		return false, nil, err
+	}
+	patterns, err := r.loadLFSPatterns()
+	if err != nil {
+		return false, nil, err
+	}
+	if len(patterns) == 0 || len(files) == 0 {
+		return false, nil, nil
+	}
+	var lfsFiles []string
+	for _, f := range files {
+		for _, pat := range patterns {
+			if r.pathMatchesPattern(pat, f) {
+				lfsFiles = append(lfsFiles, f)
+				break
+			}
+		}
+	}
+	return len(lfsFiles) > 0, lfsFiles, nil
+}
+
+func (r *Repo) RangeHasLFS(first, last string) (bool, []string, error) {
+	return r.rangeHasLFS(first, last)
 }
 
 // Config runs git config.

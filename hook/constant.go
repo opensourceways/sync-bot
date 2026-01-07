@@ -13,4 +13,6 @@ const (
 	mergeFailed        = "合并失败"
 	pushFailed         = "推送失败"
 	createPRFailed     = "创建 PR 失败"
+	emptyCherry        = "空提交，忽略创建 PR"
+	lfsSkipped         = "包含 LFS 内容，跳过同步"
 )
