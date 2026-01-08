@@ -3,6 +3,7 @@ package hook
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,9 @@ func (bot *robot) MergePullRequest(evt *client.GenericEvent, logger *logrus.Entr
 		logger.Errorln("List PullRequest comments failed")
 		return
 	}
+	logrus.WithFields(logrus.Fields{
+		"comments": comments,
+	}).Infoln("Get all comments")
 
 	// find the last /sync command
 	for _, comment := range comments {
@@ -41,6 +45,11 @@ func (bot *robot) MergePullRequest(evt *client.GenericEvent, logger *logrus.Entr
 func (bot *robot) AutoMerge(evt *client.GenericEvent, org, repo, number string, logger *logrus.Entry) {
 	targetBranch := utils.GetString(evt.Base)
 	pr, ok := bot.cli.GetPullRequest(org, repo, number)
+	prNumber, err := strconv.Atoi(number)
+	if err != nil {
+		logger.Errorf("Invalid pull request number: %s", number)
+		return
+	}
 	if !ok {
 		logger.Error("Get pull request failed")
 		return
@@ -57,45 +66,47 @@ func (bot *robot) AutoMerge(evt *client.GenericEvent, org, repo, number string, 
 
 	r, err := bot.GitClient.Clone(org, repo)
 	if err != nil {
-		logrus.Errorln("Clone pull request failed: %v", err)
+		logger.Errorf("Clone repository failed: %v", err)
 		return
 	}
-	err = r.FetchPullRequest(number)
+	err = r.FetchPullRequest(prNumber)
 	if err != nil {
-		logrus.Errorln("Fetch pull request failed: %v", err)
+		logger.Errorf("Fetch pull request failed: %v", err)
 		return
 	}
 	remoteBranch := "origin/" + targetBranch
 	err = r.Checkout(remoteBranch)
 	if err != nil {
-		logrus.Errorln("Checkout %v failed: %v", remoteBranch, err)
+		logger.Errorf("Checkout %v failed: %v", remoteBranch, err)
 		return
 	}
 
 	err = r.CheckoutNewBranch(targetBranch, true)
 	if err != nil {
-		logrus.Errorln("Checkout new branch failed: %v", err)
+		logger.Errorf("Checkout %v failed: %v", targetBranch, err)
 		return
 	}
 	prURL := fmt.Sprintf("origin/merge-requests/%s", number)
 	err = r.Merge(prURL, git.MergeFF)
 	if err != nil {
-		logrus.Errorln("Merge pull request failed: %v", err)
+		logger.Errorf("Merge failed: %v", err)
 		return
 	}
 	err = r.Push(targetBranch, true)
 	if err != nil {
-		logrus.Errorln("Push %v failed: %v", targetBranch, err)
+		logger.Errorf("Push %v failed: %v", targetBranch, err)
 		return
 	}
-	logrus.Infoln("Merge pull request %v to %v success", prURL, targetBranch)
-	return
 }
 
 func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet map[string]bool, pr client.PullRequest,
 	title string, body string, firstSha string, lastSha string) ([]syncStatus, error) {
 	number := utils.GetString(pr.Number)
 	sourceBranch := utils.GetString(pr.Head)
+	prNumber, err := strconv.Atoi(number)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pull request number: %s", number)
+	}
 	var forkPath string
 
 	r, err := bot.GitClient.Clone(org, repo)
@@ -152,97 +163,71 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			}
 
 			if _, ok := forkBranchesList[branch]; !ok {
-				var src string
-				if r.RemoteBranchExistsIn("upstream", branch) {
-					src = fmt.Sprintf("upstream/%s", branch)
-				} else if r.RemoteBranchExistsIn("origin", branch) {
-					src = fmt.Sprintf("origin/%s", branch)
-				} else {
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: createBranchFailed,
-					})
-					continue
-				}
-				err = r.CreateBranchAndPushToOrigin(branch, src)
-				if err != nil {
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: createBranchFailed,
-					})
-					continue
-				}
-			}
-
-			if r.RemoteBranchExistsIn("upstream", branch) {
-				_ = r.DisablePartialClone()
-				_ = r.FetchUpstreamFull(branch)
-				err = r.Checkout("upstream/" + branch)
-				if err != nil {
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: checkoutFailed,
-					})
-					continue
-				}
 				err = r.FetchUpstream(branch)
 				if err != nil {
 					status = append(status, syncStatus{
 						Name:   branch,
-						Status: pullFailed,
+						Status: createBranchFailed,
 					})
 					continue
 				}
-				err = r.MergeUpstream(branch)
+
+				err = r.CreateBranchAndPushToOrigin(branch, fmt.Sprintf("upstream/%s", branch))
 				if err != nil {
 					status = append(status, syncStatus{
 						Name:   branch,
-						Status: mergeFailed,
-					})
-					continue
-				}
-				err = r.PushUpstreamToOrigin(branch)
-				if err != nil {
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: pushFailed,
-					})
-					continue
-				}
-			} else {
-				_ = r.Clean()
-				if err := r.FetchOrigin(branch); err != nil {
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: pullFailed,
-					})
-					continue
-				}
-				err = r.CheckoutRemoteBySHA("origin", branch)
-				if err != nil {
-					logrus.Errorf("CheckoutRemoteBySHA failed: %v", err)
-					status = append(status, syncStatus{
-						Name:   branch,
-						Status: checkoutFailed,
+						Status: err.Error(),
 					})
 					continue
 				}
 			}
 
-		} else {
-			_ = r.Clean()
-			if err := r.FetchOrigin(branch); err != nil {
-				status = append(status, syncStatus{
-					Name:   branch,
-					Status: pullFailed,
-				})
-				continue
-			}
-			err = r.CheckoutRemoteBySHA("origin", branch)
+			// git checkout branch
+			err = r.Checkout("origin/" + branch)
 			if err != nil {
 				status = append(status, syncStatus{
 					Name:   branch,
-					Status: checkoutFailed,
+					Status: err.Error(),
+				})
+				continue
+			}
+
+			// git pull
+			err = r.FetchUpstream(branch)
+			if err != nil {
+				status = append(status, syncStatus{
+					Name:   branch,
+					Status: err.Error(),
+				})
+				continue
+			}
+
+			err = r.MergeUpstream(branch)
+			if err != nil {
+				status = append(status, syncStatus{
+					Name:   branch,
+					Status: err.Error(),
+				})
+				continue
+			}
+
+			// git push
+			err = r.PushUpstreamToOrigin(branch)
+			if err != nil {
+				status = append(status, syncStatus{
+					Name:   branch,
+					Status: err.Error(),
+				})
+				continue
+			}
+
+		} else {
+			_ = r.Clean()
+			err = r.Checkout("origin/" + branch)
+			if err != nil {
+				status = append(status, syncStatus{
+					Name:   branch,
+					Status: err.Error(),
 				})
 				continue
 			}
@@ -253,30 +238,17 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 		if err != nil {
 			status = append(status, syncStatus{
 				Name:   branch,
-				Status: createBranchFailed,
+				Status: err.Error(),
 			})
 			continue
 		}
-		err = r.FetchPullRequest(number)
+		err = r.FetchPullRequest(prNumber)
 		if err != nil {
 			status = append(status, syncStatus{
 				Name:   branch,
-				Status: pullFailed,
+				Status: err.Error(),
 			})
 			continue
-		}
-		if hasLFS, lfsFiles, lerr := r.RangeHasLFS(firstSha, lastSha); lerr == nil && hasLFS {
-			logrus.WithFields(logrus.Fields{
-				"files": lfsFiles,
-			}).Warnln("Skip sync due to LFS tracked files in range")
-			status = append(status, syncStatus{
-				Name:   branch,
-				Status: lfsSkipped,
-			})
-			continue
-		}
-		if org == "openEuler" && repo == "kernel" {
-			_ = r.SparseForRange(firstSha, lastSha)
 		}
 		err = r.CherryPick(firstSha, lastSha, git.Theirs)
 		if err != nil {
@@ -284,21 +256,6 @@ func (bot *robot) pick(org string, repo string, opt *SyncCmdOption, branchSet ma
 			status = append(status, syncStatus{
 				Name:   branch,
 				Status: syncFailed,
-			})
-			continue
-		}
-		empty, derr := r.IsDiffEmptyAgainst("origin/" + branch)
-		if derr != nil {
-			status = append(status, syncStatus{
-				Name:   branch,
-				Status: syncFailed,
-			})
-			continue
-		}
-		if empty {
-			status = append(status, syncStatus{
-				Name:   branch,
-				Status: emptyCherry,
 			})
 			continue
 		}
@@ -376,7 +333,7 @@ func (bot *robot) merge(org string, repo string, opt *SyncCmdOption, branchSet m
 		if !ok {
 			logrus.WithFields(logrus.Fields{
 				"tempBranch": tempBranch,
-			}).Errorln("Create temp branch failed")
+			}).Errorln("Create temp branch failed:")
 			// TODO: check if branch exist
 		} else {
 			logrus.Infoln("Create temp branch:", branch)
@@ -418,7 +375,9 @@ func (bot *robot) sync(evt *client.GenericEvent, user string, command string, lo
 
 	opt, err := parseSyncCommand(command)
 	if err != nil {
-		logger.Errorln("Parse /sync command failed:", err)
+		logrus.WithFields(logrus.Fields{
+			"opt": opt,
+		}).Errorln("Parse /sync command failed:", err)
 		return err
 	}
 
@@ -480,7 +439,10 @@ func (bot *robot) sync(evt *client.GenericEvent, user string, command string, lo
 
 		body, err = executeTemplate(syncPRBodyTmpl, data)
 		if err != nil {
-			logger.Errorln("Execute template failed:", err)
+			logrus.WithFields(logrus.Fields{
+				"tmpl": syncPRBodyTmpl,
+				"data": data,
+			}).Errorln("Execute template failed:", err)
 			return err
 		}
 	}
