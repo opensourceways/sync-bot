@@ -464,6 +464,9 @@ func (r *Repo) CheckoutNewBranch(branch string, force bool) error {
 
 // CherryPick cherry-pick from commits with strategyOption
 func (r *Repo) CherryPick(first, last string, strategyOption StrategyOption) error {
+	if err := r.ensureIdentity(); err != nil {
+		return fmt.Errorf("git identity setup failed before cherry-pick: %v", err)
+	}
 	logrus.Infof("Cherry Pick from %s to %s.", first, last)
 	co := r.gitCommand("cherry-pick", "-x", fmt.Sprintf("%s^..%s", first, last))
 	out, err := co.CombinedOutput()
@@ -662,6 +665,21 @@ func (r *Repo) fetchRefspecRobust(remote, refspec string) error {
 			}).Errorf("fetch refspec failed: %v, output: %s", ferr, out)
 			return fmt.Errorf("fetch %s with %s failed: %v. output: %s", remote, refspec, ferr, out)
 		}
+	}
+	return nil
+}
+
+func (r *Repo) ensureIdentity() error {
+	getName := r.gitCommand("config", "--get", "user.name")
+	n, ne := getName.CombinedOutput()
+	name := strings.TrimSpace(string(n))
+	if ne != nil || name == "" {
+		if err := r.Config("user.name", "sync-bot"); err != nil {
+			return err
+		}
+	}
+	if err := r.Config("user.email", "infra@openeuler.sh"); err != nil {
+		return err
 	}
 	return nil
 }
